@@ -138,7 +138,10 @@ int main(int argc, char **argv)
 	free(prob.x);
 	free(x_space);
 	free(line);
-
+	// COO
+	free(prob.cooValA);
+	free(prob.cooRowIndA);
+	free(prob.cooColIndA);
 	return 0;
 }
 
@@ -397,6 +400,11 @@ void read_problem(const char *filename)
 	prob.y = Malloc(double,prob.l);
 	prob.x = Malloc(struct feature_node *,prob.l);
 	x_space = Malloc(struct feature_node,elements+prob.l);
+	// COO matrix format
+	prob.nnz = elements;
+	prob.cooValA = Malloc(double,elements);
+	prob.cooRowIndA = Malloc(size_t,elements);
+	prob.cooColIndA = Malloc(size_t,elements);
 
 	max_index = 0;
 	j=0;
@@ -427,11 +435,16 @@ void read_problem(const char *filename)
 				exit_input_error(i+1);
 			else
 				inst_max_index = x_space[j].index;
+			// COO
+			prob.cooRowIndA[j] = i;
+			prob.cooColIndA[j] = x_space[j].index;
 
 			errno = 0;
 			x_space[j].value = strtod(val,&endptr);
 			if(endptr == val || errno != 0 || (*endptr != '\0' && !isspace(*endptr)))
 				exit_input_error(i+1);
+			// COO			
+			prob.cooValA[j] = x_space[j].value;
 
 			++j;
 		}
@@ -439,8 +452,14 @@ void read_problem(const char *filename)
 		if(inst_max_index > max_index)
 			max_index = inst_max_index;
 
-		if(prob.bias >= 0)
-			x_space[j++].value = prob.bias;
+		if(prob.bias >= 0){
+		  // COO
+		  prob.cooValA[j] = prob.bias;
+		  prob.cooRowIndA[j] = i;
+		  prob.cooColIndA[j] = x_space[j].index;
+		  // end COO
+		  x_space[j++].value = prob.bias;
+		}
 
 		x_space[j++].index = -1;
 	}
@@ -448,9 +467,18 @@ void read_problem(const char *filename)
 	if(prob.bias >= 0)
 	{
 		prob.n=max_index+1;
-		for(i=1;i<prob.l;i++)
-			(prob.x[i]-2)->index = prob.n;
+		int coo_j = 0;
+		for(i=1;i<prob.l;i++){
+		  (prob.x[i]-2)->index = prob.n;
+		  // COO: find first entry of next row
+		  while(prob.cooRowIndA[coo_j]== (unsigned)i-1){
+		    coo_j++;
+		  }
+		  prob.cooColIndA[coo_j-1] = prob.n;
+		}
 		x_space[j-2].index = prob.n;
+		// COO
+		prob.cooColIndA[j-2] = prob.n;
 	}
 	else
 		prob.n=max_index;
