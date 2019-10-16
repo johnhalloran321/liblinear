@@ -33,9 +33,12 @@ CUDA_ADD_CUSPARSE_TO_TARGET (train)
     
 target_link_libraries(train blas)
 
+cuda_add_executable(predict ./predict.c ./linear.cpp ./tron.cu)
+CUDA_ADD_CUBLAS_TO_TARGET (predict)
+CUDA_ADD_CUSPARSE_TO_TARGET (predict)
+    
+target_link_libraries(predict blas)
+
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 
-install (TARGETS train DESTINATION .)
-
-		
-		
+install (TARGETS train predict DESTINATION .)
