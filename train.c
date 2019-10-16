@@ -403,8 +403,8 @@ void read_problem(const char *filename)
 	// COO matrix format
 	prob.nnz = elements;
 	prob.cooValA = Malloc(double,elements);
-	prob.cooRowIndA = Malloc(size_t,elements);
-	prob.cooColIndA = Malloc(size_t,elements);
+	prob.cooRowIndA = Malloc(int,elements);
+	prob.cooColIndA = Malloc(int,elements);
 
 	max_index = 0;
 	j=0;
@@ -471,7 +471,7 @@ void read_problem(const char *filename)
 		for(i=1;i<prob.l;i++){
 		  (prob.x[i]-2)->index = prob.n;
 		  // COO: find first entry of next row
-		  while(prob.cooRowIndA[coo_j]== (unsigned)i-1){
+		  while(prob.cooRowIndA[coo_j]== i-1){
 		    coo_j++;
 		  }
 		  prob.cooColIndA[coo_j-1] = prob.n;

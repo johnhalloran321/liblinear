@@ -27,13 +27,13 @@ include_directories(".")
 
 
 # executable	
-cuda_add_executable(train ./train.c ./linear.cpp ./tron.cu)
+cuda_add_executable(train ./train.c ./linear.cu ./tron.cu)
 CUDA_ADD_CUBLAS_TO_TARGET (train)
 CUDA_ADD_CUSPARSE_TO_TARGET (train)
     
 target_link_libraries(train blas)
 
-cuda_add_executable(predict ./predict.c ./linear.cpp ./tron.cu)
+cuda_add_executable(predict ./predict.c ./linear.cu ./tron.cu)
 CUDA_ADD_CUBLAS_TO_TARGET (predict)
 CUDA_ADD_CUSPARSE_TO_TARGET (predict)
     

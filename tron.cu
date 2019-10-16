@@ -26,24 +26,6 @@ extern int dscal_(int *, double *, double *, int *);
 }
 #endif
 
-// CUDA macros
-//
-
-// CUDA: various checks for different function calls.
-#define CUDA_CHECK(condition) \
-  /* Code block avoids redefinition of cudaError_t error */ \
-  do { \
-    cudaError_t error = condition; \
-    CHECK_EQ(error, cudaSuccess) << " " << cudaGetErrorString(error); \
-  } while (0)
-
-#define CUBLAS_CHECK(condition) \
-  do { \
-    cublasStatus_t status = condition; \
-    CHECK_EQ(status, CUBLAS_STATUS_SUCCESS) << " " \
-      << caffe::cublasGetErrorString(status); \
-  } while (0)
-
 // CUDA: grid stride looping
 #define CUDA_KERNEL_LOOP(i, n) \
   for (int i = blockIdx.x * blockDim.x + threadIdx.x; \
@@ -71,39 +53,6 @@ inline int GET_BLOCKS(const int N) {
 // CUDA: number of blocks for threads.
 inline int GET_BLOCKS_VAR(const int N, const int M) {
   return (N + M - 1) / M;
-}
-
-// #define CUDA_ERROR_CHECK
-#define CudaSafeCall( err ) __cudaSafeCall( err, __FILE__, __LINE__ )
-// #define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
-
-// for compatibility issues, not using log2
-
-inline void __cudaSafeCall( cudaError err, const char *file, const int line )
-{
-#ifdef CUDA_ERROR_CHECK
-  if ( cudaSuccess != err )
-    {
-      fprintf( stderr, "cudaSafeCall() failed at %s:%i : %s\n",
-	       file, line, cudaGetErrorString( err ) );
-      exit( -1 );
-    }
-#endif
-
-  return;
-}
-
-inline
-cudaError_t checkCuda(cudaError_t result)
-{
-#if defined(DEBUG) || defined(_DEBUG)
-  if (result != cudaSuccess) {
-    fprintf(stderr, "CUDA Runtime Error: %s\n", 
-            cudaGetErrorString(result));
-    assert(result == cudaSuccess);
-  }
-#endif
-  return result;
 }
 
 __global__ void sub_mem_copy_all(double* X, double* X_sub, double* C, double* C_sub, double* z, double* z_sub, double* Y,
