@@ -349,6 +349,7 @@ protected:
   int sizeI;
   const problem *prob;
   // Cuda variables
+  double* dev_w;
   double* dev_y;
   int* dev_I;
   double* dev_cooValA;
@@ -363,6 +364,7 @@ protected:
 l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
 {
   int l=prob->l;
+  int n=prob->n;
   int nnz = prob->nnz;
   this->prob = prob;
   this->C = C;
@@ -373,6 +375,7 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   CudaSafeCall(cudaMallocHost((void** )&I, l * sizeof(int)));
   CudaSafeCall(cudaMallocHost((void** )&z, l * sizeof(double)));
   // Cuda device side variables
+  CudaSafeCall(cudaMalloc((void** )&dev_w, n * sizeof(double)));
   CudaSafeCall(cudaMalloc((void** )&dev_y, l * sizeof(double)));
   CudaSafeCall(cudaMalloc((void** )&dev_cooValA, nnz * sizeof(double)));
   CudaSafeCall(cudaMalloc((void** )&dev_sub_cooValA, nnz * sizeof(double)));
@@ -392,10 +395,10 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCuda(cudaStreamCreateWithFlags(&stream3, cudaStreamNonBlocking));
   checkCuda(cudaStreamCreateWithFlags(&stream4, cudaStreamNonBlocking));
 
-  cudaMemcpyAsync(dev_cooValA, prob->cooValA, nnz * sizeof(double), cudaMemcpyHostToDevice, stream1);
-  cudaMemcpyAsync(dev_cooRowIndA, prob->cooRowIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream2);
-  cudaMemcpyAsync(dev_cooColIndA, prob->cooColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream3);
-  cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream4);
+  checkCuda(cudaMemcpyAsync(dev_cooValA, prob->cooValA, nnz * sizeof(double), cudaMemcpyHostToDevice, stream1));
+  checkCuda(cudaMemcpyAsync(dev_cooRowIndA, prob->cooRowIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream2));
+  checkCuda(cudaMemcpyAsync(dev_cooColIndA, prob->cooColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream3));
+  checkCuda(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream4));
 
   checkCuda(cudaStreamSynchronize(stream4));
   checkCuda(cudaStreamSynchronize(stream3));
@@ -521,6 +524,7 @@ void l2r_l2_svc_fun::Xv(double *v, double *Xv)
 	int i;
 	int l=prob->l;
 	feature_node **x=prob->x;
+	cublasHandle_t handle;
 
 	for(i=0;i<l;i++)
 		Xv[i]=sparse_operator::dot(v, x[i]);
@@ -2607,8 +2611,8 @@ model* train(const problem *prob, const parameter *param)
 
 	if(check_regression_model(model_))
 	{
-		model_->w = Malloc(double, w_size);
-
+		// model_->w = Malloc(double, w_size);
+		CudaSafeCall(cudaMallocHost((void** )&model_->w, w_size * sizeof(double)));
 		if(param->init_sol != NULL)
 			for(i=0;i<w_size;i++)
 				model_->w[i] = param->init_sol[i];
@@ -2669,7 +2673,8 @@ model* train(const problem *prob, const parameter *param)
 		// multi-class svm by Crammer and Singer
 		if(param->solver_type == MCSVM_CS)
 		{
-			model_->w=Malloc(double, n*nr_class);
+			// model_->w=Malloc(double, n*nr_class);
+			CudaSafeCall(cudaMallocHost((void** )&model_->w, n*nr_class * sizeof(double)));
 			for(i=0;i<nr_class;i++)
 				for(j=start[i];j<start[i]+count[i];j++)
 					sub_prob.y[j] = i;
@@ -2680,8 +2685,8 @@ model* train(const problem *prob, const parameter *param)
 		{
 			if(nr_class == 2)
 			{
-				model_->w=Malloc(double, w_size);
-
+				// model_->w=Malloc(double, w_size);
+			  CudaSafeCall(cudaMallocHost((void** )&model_->w, w_size * sizeof(double)));
 				int e0 = start[0]+count[0];
 				k=0;
 				for(; k<e0; k++)
@@ -2700,8 +2705,11 @@ model* train(const problem *prob, const parameter *param)
 			}
 			else
 			{
-				model_->w=Malloc(double, w_size*nr_class);
-				double *w=Malloc(double, w_size);
+				// model_->w=Malloc(double, w_size*nr_class);
+				// double *w=Malloc(double, w_size);
+				double *w;
+				CudaSafeCall(cudaMallocHost((void** )&w, w_size * sizeof(double)));
+				CudaSafeCall(cudaMallocHost((void** )&w, w_size*nr_class * sizeof(double)));
 				for(i=0;i<nr_class;i++)
 				{
 					int si = start[i];
@@ -2727,7 +2735,8 @@ model* train(const problem *prob, const parameter *param)
 					for(j=0;j<w_size;j++)
 						model_->w[j*nr_class+i] = w[j];
 				}
-				free(w);
+				// free(w);
+				checkCuda(cudaFreeHost(w));
 			}
 
 		}
@@ -3270,7 +3279,8 @@ double get_decfun_bias(const struct model *model_, int label_idx)
 void free_model_content(struct model *model_ptr)
 {
 	if(model_ptr->w != NULL)
-		free(model_ptr->w);
+	  	checkCuda(cudaFreeHost(model_ptr->w));
+		// free(model_ptr->w);
 	if(model_ptr->label != NULL)
 		free(model_ptr->label);
 }
