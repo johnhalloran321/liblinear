@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+//using namespace std;
 #include "tron.h"
 
 #ifndef min
@@ -24,6 +25,236 @@ extern int dscal_(int *, double *, double *, int *);
 #ifdef __cplusplus
 }
 #endif
+
+// CUDA macros
+//
+
+// CUDA: various checks for different function calls.
+#define CUDA_CHECK(condition) \
+  /* Code block avoids redefinition of cudaError_t error */ \
+  do { \
+    cudaError_t error = condition; \
+    CHECK_EQ(error, cudaSuccess) << " " << cudaGetErrorString(error); \
+  } while (0)
+
+#define CUBLAS_CHECK(condition) \
+  do { \
+    cublasStatus_t status = condition; \
+    CHECK_EQ(status, CUBLAS_STATUS_SUCCESS) << " " \
+      << caffe::cublasGetErrorString(status); \
+  } while (0)
+
+// CUDA: grid stride looping
+#define CUDA_KERNEL_LOOP(i, n) \
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x; \
+       i < (n); \
+       i += blockDim.x * gridDim.x)
+
+// CUDA: check for error after kernel execution and exit loudly if there is one.
+#define CUDA_POST_KERNEL_CHECK CUDA_CHECK(cudaPeekAtLastError())
+
+// CUDA: library error reporting.
+const char* cublasGetErrorString(cublasStatus_t error);
+
+// CUDA: use 512 threads per block
+const int CUDA_NUM_THREADS = 512;
+const int SUBMEMALL_NUM_THREADS = 32;
+const int SUBMEMA_NUM_THREADS = 128;
+const int SUBMEMB_NUM_THREADS = 64;
+const int SUBMEMC_NUM_THREADS = 32;
+
+// CUDA: number of blocks for threads.
+inline int GET_BLOCKS(const int N) {
+  return (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS;
+}
+
+// CUDA: number of blocks for threads.
+inline int GET_BLOCKS_VAR(const int N, const int M) {
+  return (N + M - 1) / M;
+}
+
+// #define CUDA_ERROR_CHECK
+#define CudaSafeCall( err ) __cudaSafeCall( err, __FILE__, __LINE__ )
+// #define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
+
+// for compatibility issues, not using log2
+
+inline void __cudaSafeCall( cudaError err, const char *file, const int line )
+{
+#ifdef CUDA_ERROR_CHECK
+  if ( cudaSuccess != err )
+    {
+      fprintf( stderr, "cudaSafeCall() failed at %s:%i : %s\n",
+	       file, line, cudaGetErrorString( err ) );
+      exit( -1 );
+    }
+#endif
+
+  return;
+}
+
+inline
+cudaError_t checkCuda(cudaError_t result)
+{
+#if defined(DEBUG) || defined(_DEBUG)
+  if (result != cudaSuccess) {
+    fprintf(stderr, "CUDA Runtime Error: %s\n", 
+            cudaGetErrorString(result));
+    assert(result == cudaSuccess);
+  }
+#endif
+  return result;
+}
+
+__global__ void sub_mem_copy_all(double* X, double* X_sub, double* C, double* C_sub, double* z, double* z_sub, double* Y,
+				 // thrust::device_vector<int>& Id, 
+				 int* Id, 
+				 int sizeI, int n, int m)
+{
+  #ifdef GRIDSTRIDELOOP
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(r, n) {
+    int Idr = Id[r];
+    double c = C[Idr];
+    // note that Idr >= r by construction
+    C_sub[r] = c;
+    z_sub[r] = c * Y[Idr] * (z[Idr] -1);
+    for(int k = 0; k < m; k++)
+      X_sub[r*m + k] = X[Idr*m + k];
+  }
+  #else
+  int r = blockIdx.x * blockDim.x + threadIdx.x;
+  // Check if within image bounds.
+  if (r >= sizeI)
+    return;
+  int Idr = Id[r];
+  double c = C[Idr];
+  // note that Idr >= r by construction
+  C_sub[r] = c;
+  z_sub[r] = c * Y[Idr] * (z[Idr] -1);
+  #pragma unroll
+  for(int k = 0; k < m; k++)
+    X_sub[r*m + k] = X[Idr*m + k];
+  #endif
+}
+
+__global__ void sub_mem_copyA(double* C, double* C_sub,
+			      int* Id, 
+			      int sizeI, int n, int m)
+{
+  #ifdef GRIDSTRIDELOOP
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(r, n) {
+    int Idr = Id[r];
+    // note that Idr >= r by construction
+    C_sub[r] = C[Idr];
+  }
+  #else
+  int r = blockIdx.x * blockDim.x + threadIdx.x;
+  // Check if within image bounds.
+  if (r >= sizeI)
+    return;
+  int Idr = Id[r];
+  // note that Idr >= r by construction
+  C_sub[r] = C[Idr];
+  #endif
+}
+
+__global__ void sub_mem_copyB(double* z, double* z_sub, double* Y,
+			      double* C, int* Id, 
+			      int sizeI, int n, int m)
+{
+  #ifdef GRIDSTRIDELOOP
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(r, n) {
+    int Idr = Id[r];
+    // note that Idr >= r by construction
+    z_sub[r] = C[Idr] * Y[Idr] * (z[Idr] -1);
+  }
+  #else
+  int r = blockIdx.x * blockDim.x + threadIdx.x;
+  // Check if within image bounds.
+  if (r >= sizeI)
+    return;
+  int Idr = Id[r];
+  // note that Idr >= r by construction
+  z_sub[r] = C[Idr] * Y[Idr] * (z[Idr] -1);
+  #endif
+}
+
+__global__ void sub_mem_copyC(double* X, double* X_sub,
+			      int* Id, 
+			      int sizeI, int n, int m)
+{
+  #ifdef GRIDSTRIDELOOP
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(r, n) {
+    int Idr = Id[r];
+    for(int k = 0; k < m; k++)
+      X_sub[r*m + k] = X[Idr*m + k];
+  }
+  #else
+  int r = blockIdx.x * blockDim.x + threadIdx.x;
+  // Check if within image bounds.
+  if (r >= sizeI)
+    return;
+  int Idr = Id[r];
+  #pragma unroll
+  for(int k = 0; k < m; k++)
+    X_sub[r*m + k] = X[Idr*m + k];
+  #endif
+}
+
+__global__ void sub_mem_copy2d(double* X, double* X_sub, int* Id, int sizeI, int n, int m)
+{
+  const int r = blockIdx.x * blockDim.x + threadIdx.x;
+  const int c = blockIdx.y * blockDim.y + threadIdx.y;
+  const int i = r * m + c; // 1D flat index
+
+  // Check if within image bounds.
+  if ((c >= m) || (r >= n))
+    return;
+  X_sub[i] = X[Id[r] * m + c];
+}
+
+__global__ void dgemv_simple(double* A, double* x, double* y, double* C, int n, int m)
+{
+  // calculate y = C.* A*x, where .* is element-by-element matrix multiplication
+  #ifdef GRIDSTRIDELOOP
+  CUDA_KERNEL_LOOP(row, n) {
+    double sum = 0.0;
+    for (int k = 0; k < m; k++) {
+      sum += A[row*m+k] * x[k];
+    }
+    y[row] = C[row] * sum;
+  }
+  #else
+  int row = blockIdx.x * blockDim.x + threadIdx.x;
+  if(row >= n)
+    return;
+
+  double sum = 0.0;
+  #pragma unroll
+  for (int k = 0; k < m; k++) {
+    sum += A[row*m+k] * x[k];
+  }
+  y[row] = C[row] * sum;
+  #endif
+}
+
+__global__ void dgemv_sub_grad(double* A, double* x, double* y, int* Id, int sizeI, int n, int m)
+{
+  // calculate y = C.* A*x, where .* is element-by-element matrix multiplication
+  int row = blockIdx.x * blockDim.x + threadIdx.x;
+  if(row >= n)
+    return;
+  int rowSubId = Id[row];
+  double sum = 0.0;
+  for (int k = 0; k < m; k++) {
+    sum += A[rowSubId*m+k] * x[k];
+  }
+  y[row] = sum;
+}
 
 static void default_print(const char *buf)
 {

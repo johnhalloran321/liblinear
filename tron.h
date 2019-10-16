@@ -1,6 +1,28 @@
 #ifndef _TRON_H
 #define _TRON_H
 
+#include <iostream>
+#include <cuda_runtime.h>
+#include <cublas_v2.h>
+#include <cusparse_v2.h>
+
+#include <thrust/execution_policy.h>
+#include <thrust/host_vector.h>
+#include <thrust/device_vector.h>
+#include <thrust/copy.h>
+#include <thrust/fill.h>
+#include <thrust/sequence.h>
+#include <thrust/inner_product.h>
+#include <thrust/transform.h>
+#include <thrust/functional.h>
+
+#include <iterator>
+#include <thrust/iterator/counting_iterator.h>
+
+typedef thrust::device_vector<int>::iterator IndexIterator;
+
+// using namespace std;
+
 class function
 {
 public:
