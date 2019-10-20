@@ -23,9 +23,9 @@ struct problem
   double bias;            /* < 0 if no bias term */
   // represent sparse matrix in COO format
   int nnz;
-  double* cooValA;
-  int* cooRowIndA;
-  int* cooColIndA;
+  /* double* cooValA; */
+  /* int* cooRowIndA; */
+  /* int* cooColIndA; */
   
 };
 

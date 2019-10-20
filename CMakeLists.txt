@@ -1,6 +1,8 @@
 cmake_minimum_required (VERSION 2.6)
 project (liblinear)
-find_package(CUDA 9.0 REQUIRED)
+set(CUDA_TOOLKIT_ROOT_DIR /usr/local/cuda-10.1)
+find_package(CUDA 10.0 REQUIRED)
+include(FindCUDA)
 find_package(OpenMP REQUIRED)
 
 find_cuda_helper_libs(cusparse)

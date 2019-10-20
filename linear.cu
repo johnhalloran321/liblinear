@@ -6,6 +6,8 @@
 #include <locale.h>
 #include "linear.h"
 #include "tron.h"
+#include <helper_cuda.h>  // helper function CUDA error checking and initialization
+#include <helper_functions.h>  // helper for shared functions common to CUDA Samples
 int liblinear_version = LIBLINEAR_VERSION;
 typedef signed char schar;
 template <class T> static inline void swap(T& x, T& y) { T t=x; x=y; y=t; }
@@ -32,7 +34,7 @@ static void print_null(const char *s) {}
 
 static void (*liblinear_print_string) (const char *) = &print_string_stdout;
 
-#if 1
+// #if 1
 static void info(const char *fmt,...)
 {
 	char buf[BUFSIZ];
@@ -42,16 +44,14 @@ static void info(const char *fmt,...)
 	va_end(ap);
 	(*liblinear_print_string)(buf);
 }
-#else
-static void info(const char *fmt,...) {}
-#endif
+// #else
+// static void info(const char *fmt,...) {}
+// #endif
 
 // Cuda error checking functions
 #define CUDA_ERROR_CHECK
 #define CudaSafeCall( err ) __cudaSafeCall( err, __FILE__, __LINE__ )
 #define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
-
-// for compatibility issues, not using log2
 
 inline void __cudaSafeCall( cudaError err, const char *file, const int line )
 {
@@ -351,80 +351,184 @@ protected:
   // Cuda variables
   double* dev_w;
   double* dev_y;
+  double* dev_z;
   int* dev_I;
   double* dev_cooValA;
   int* dev_cooRowIndA;
   int* dev_cooColIndA;
-  // Submatrix
-  double* dev_sub_cooValA;
-  int* dev_sub_cooRowIndA;
-  int* dev_sub_cooColIndA;
+  int* csrRowPtr;
+  double* bsrValC;
+  int* bsrColIndC;
+  int* bsrRowPtrC;
+  int nnzb, blockDim;
+  // // Submatrix
+  // double* dev_sub_cooValA;
+  // int* dev_sub_cooRowIndA;
+  // int* dev_sub_cooColIndA;
 };
 
 l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
 {
-  int l=prob->l;
-  int n=prob->n;
-  int nnz = prob->nnz;
   this->prob = prob;
   this->C = C;
+  int l=prob->l;
+  int n=prob->n;
+  int nnz = 0;
+
+  // Generate matrix in COO format
+  for(int i=0;i<l;i++){
+    feature_node *x = prob->x[i];
+    while(x->index != -1)
+      {
+  	x++;
+  	nnz++;
+      }
+  }
+
+  double* cooValA = new double[nnz];
+  int* cooRowIndA = new int[nnz];
+  int* cooColIndA = new int[nnz];
+  int ind = 0;
+  info("nnz=%d, ind=%d, n=%d, l=%d\n", nnz, ind, n, l);
+  for(int i=0;i<l;i++){
+    feature_node *x = prob->x[i];
+    while(x->index != -1)
+      {
+  	cooValA[ind] = x->value;
+  	cooRowIndA[ind] = i;
+  	cooColIndA[ind] = x->index-1;
+  	x++;
+  	ind++;
+      }
+  }
+  info("nnz=%d, ind=%d\n", nnz, ind);
+  // // This will pick the best possible CUDA capable device
+  // cudaDeviceProp deviceProp;
+  // int devID = findCudaDevice(argc, (const char **)argv);
+
+  // if (devID < 0) {
+  //   printf("exiting...\n");
+  //   exit(EXIT_SUCCESS);
+  // }
+
+  // checkCudaErrors(cudaGetDeviceProperties(&deviceProp, devID));
+
+  // // Statistics about the GPU device
+  // printf(
+  // 	 "> GPU device has %d Multi-Processors, SM %d.%d compute capabilities\n\n",
+  // 	 deviceProp.multiProcessorCount, deviceProp.major, deviceProp.minor);
 
   // z = new double[l];
   // I = new int[l];
   // // Pin memory
-  CudaSafeCall(cudaMallocHost((void** )&I, l * sizeof(int)));
-  CudaSafeCall(cudaMallocHost((void** )&z, l * sizeof(double)));
+  checkCudaErrors(cudaMallocHost((void** )&I, l * sizeof(int)));
+  checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
   // Cuda device side variables
-  CudaSafeCall(cudaMalloc((void** )&dev_w, n * sizeof(double)));
-  CudaSafeCall(cudaMalloc((void** )&dev_y, l * sizeof(double)));
-  CudaSafeCall(cudaMalloc((void** )&dev_cooValA, nnz * sizeof(double)));
-  CudaSafeCall(cudaMalloc((void** )&dev_sub_cooValA, nnz * sizeof(double)));
-  CudaSafeCall(cudaMalloc((void** )&dev_cooRowIndA, nnz * sizeof(int)));
-  CudaSafeCall(cudaMalloc((void** )&dev_cooColIndA, nnz * sizeof(int)));
-  CudaSafeCall(cudaMalloc((void** )&dev_sub_cooRowIndA, nnz * sizeof(int)));
-  CudaSafeCall(cudaMalloc((void** )&dev_sub_cooColIndA, nnz * sizeof(int)));
- 
+  checkCudaErrors(cudaMalloc((void** )&dev_w, n * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_y, l * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_cooValA, nnz * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_cooRowIndA, nnz * sizeof(int)));
+  checkCudaErrors(cudaMalloc((void** )&dev_cooColIndA, nnz * sizeof(int)));
+  // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooValA, nnz * sizeof(double)));
+  // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooRowIndA, nnz * sizeof(int)));
+  // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooColIndA, nnz * sizeof(int)));
+
   // Streams
   // Copy memory over to the device
   cudaStream_t stream1;
   cudaStream_t stream2;
   cudaStream_t stream3;
   cudaStream_t stream4;
-  checkCuda(cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking));
-  checkCuda(cudaStreamCreateWithFlags(&stream2, cudaStreamNonBlocking));
-  checkCuda(cudaStreamCreateWithFlags(&stream3, cudaStreamNonBlocking));
-  checkCuda(cudaStreamCreateWithFlags(&stream4, cudaStreamNonBlocking));
+  checkCudaErrors(cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking));
+  checkCudaErrors(cudaStreamCreateWithFlags(&stream2, cudaStreamNonBlocking));
+  checkCudaErrors(cudaStreamCreateWithFlags(&stream3, cudaStreamNonBlocking));
+  checkCudaErrors(cudaStreamCreateWithFlags(&stream4, cudaStreamNonBlocking));
 
-  checkCuda(cudaMemcpyAsync(dev_cooValA, prob->cooValA, nnz * sizeof(double), cudaMemcpyHostToDevice, stream1));
-  checkCuda(cudaMemcpyAsync(dev_cooRowIndA, prob->cooRowIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream2));
-  checkCuda(cudaMemcpyAsync(dev_cooColIndA, prob->cooColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream3));
-  checkCuda(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream4));
+  // checkCudaErrors(cudaMemcpyAsync(dev_cooValA, cooValA, nnz * sizeof(double), cudaMemcpyHostToDevice, stream1));
+  // checkCudaErrors(cudaMemcpyAsync(dev_cooRowIndA, cooRowIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream2));
+  // checkCudaErrors(cudaMemcpyAsync(dev_cooColIndA, cooColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream3));
+  checkCudaErrors(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream4));
 
-  checkCuda(cudaStreamSynchronize(stream4));
-  checkCuda(cudaStreamSynchronize(stream3));
-  checkCuda(cudaStreamSynchronize(stream2));
-  checkCuda(cudaStreamSynchronize(stream1));
+  checkCudaErrors(cudaStreamSynchronize(stream4));
+  checkCudaErrors(cudaStreamSynchronize(stream3));
+  checkCudaErrors(cudaStreamSynchronize(stream2));
+  checkCudaErrors(cudaStreamSynchronize(stream1));
+
+  delete [] cooValA;
+  delete [] cooRowIndA;
+  delete [] cooColIndA;
+  // // convert to csr format
+  // checkCudaErrors(cudaMalloc((void** )&csrRowPtr, (l+1) * sizeof(int)));
+  // cusparseHandle_t handle;
+  // cusparseCreate(&handle);
+  // cusparseXcoo2csr(handle, dev_cooRowIndA, nnz, n, 
+  // 		  csrRowPtr, CUSPARSE_INDEX_BASE_ZERO);
+  // // convert to bsr
+  // cusparseMatDescr_t descrA, descrC;
+  // cusparseCreateMatDescr(&descrA);
+  // cusparseCreateMatDescr(&descrC);
+  // cusparseDirection_t dir = CUSPARSE_DIRECTION_ROW;
+  // blockDim = 1;
+  // int base; //, nnzb;
+  // int mb = (l + blockDim-1)/blockDim;
+  // checkCudaErrors(cudaMalloc((void**)&bsrRowPtrC, sizeof(int) *(mb+1)));
+  // // nnzTotalDevHostPtr points to host memory
+  // int *nnzTotalDevHostPtr = &nnzb;
+  // cusparseXcsr2bsrNnz(handle, dir, l, n,
+  // 		      descrA, csrRowPtr, dev_cooColIndA,
+  // 		      blockDim,
+  // 		      descrC, bsrRowPtrC,
+  // 		      nnzTotalDevHostPtr);
+  // if (NULL != nnzTotalDevHostPtr){
+  //   nnzb = *nnzTotalDevHostPtr;
+  // }else{
+  //   checkCudaErrors(cudaMemcpy(&nnzb, bsrRowPtrC+mb, sizeof(int), cudaMemcpyDeviceToHost));
+  //   checkCudaErrors(cudaMemcpy(&base, bsrRowPtrC, sizeof(int), cudaMemcpyDeviceToHost));
+  //   nnzb -= base;
+  // }
+  // checkCudaErrors(cudaMalloc((void**)&bsrColIndC, sizeof(int)*nnzb));
+  // checkCudaErrors(cudaMalloc((void**)&bsrValC, sizeof(double)*(blockDim*blockDim)*nnzb));
+  // cusparseDcsr2bsr(handle, dir, l, n,
+  // 		   descrA,
+  // 		   dev_cooValA, csrRowPtr, dev_cooColIndA,
+  // 		   blockDim,
+  // 		   descrC,
+  // 		   bsrValC, bsrRowPtrC, bsrColIndC);
+  // // Destroy handle and matrix descriptors
+  // cusparseDestroy(handle);
+  // cusparseDestroyMatDescr(descrA);
+  // cusparseDestroyMatDescr(descrC);
   // Destroy streams now
-  checkCuda(cudaStreamDestroy(stream1));
-  checkCuda(cudaStreamDestroy(stream2));
-  checkCuda(cudaStreamDestroy(stream3));
-  checkCuda(cudaStreamDestroy(stream4));
+  checkCudaErrors(cudaStreamDestroy(stream1));
+  checkCudaErrors(cudaStreamDestroy(stream2));
+  checkCudaErrors(cudaStreamDestroy(stream3));
+  checkCudaErrors(cudaStreamDestroy(stream4));
+  // Free unnecessary device memory
+  checkCudaErrors(cudaFree(dev_cooValA));
+  checkCudaErrors(cudaFree(dev_cooRowIndA));
+  checkCudaErrors(cudaFree(dev_cooColIndA));
 }
 
 l2r_l2_svc_fun::~l2r_l2_svc_fun()
 {
   // delete[] z;
   // delete[] I;
-  checkCuda(cudaFreeHost(z));
-  checkCuda(cudaFreeHost(I));
-  checkCuda(cudaFree(dev_y));
-  checkCuda(cudaFree(dev_I));
-  checkCuda(cudaFree(dev_cooValA));
-  checkCuda(cudaFree(dev_cooRowIndA));
-  checkCuda(cudaFree(dev_sub_cooColIndA));
-  checkCuda(cudaFree(dev_sub_cooValA));
-  checkCuda(cudaFree(dev_sub_cooRowIndA));
-  checkCuda(cudaFree(dev_sub_cooColIndA));
+  checkCudaErrors(cudaFreeHost(z));
+  checkCudaErrors(cudaFreeHost(I));
+  checkCudaErrors(cudaFree(dev_z));
+  checkCudaErrors(cudaFree(dev_w));
+  checkCudaErrors(cudaFree(dev_y));
+  checkCudaErrors(cudaFree(dev_I));
+  checkCudaErrors(cudaFree(csrRowPtr));
+  // // bsr format arrays
+  // checkCudaErrors(cudaFree(bsrValC));
+  // checkCudaErrors(cudaFree(bsrColIndC));
+  // checkCudaErrors(cudaFree(bsrRowPtrC));
+  
+  // checkCudaErrors(cudaFree(dev_sub_cooValA));
+  // checkCudaErrors(cudaFree(dev_sub_cooRowIndA));
+  // checkCudaErrors(cudaFree(dev_sub_cooColIndA));
 }
 
 double l2r_l2_svc_fun::fun(double *w)
@@ -523,11 +627,41 @@ void l2r_l2_svc_fun::Xv(double *v, double *Xv)
 {
 	int i;
 	int l=prob->l;
-	feature_node **x=prob->x;
-	cublasHandle_t handle;
+	int w_size=get_nr_variable();
+	double alphaCu = 1.0;
+	double betaCu = 0.0;
+	int inc = 1;
 
+	feature_node **x=prob->x;
 	for(i=0;i<l;i++)
 		Xv[i]=sparse_operator::dot(v, x[i]);
+
+	// int blockDim = 1;
+	// int mb = l;
+	// int nb = prob->n;
+
+	// cusparseHandle_t handle;
+	// cudaStream_t stream;
+	// cusparseMatDescr_t descr;
+
+	// cusparseCreateMatDescr(&descr);
+	// // set handle to the same stream
+	// checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+	// cusparseCreate(&handle);
+	// cusparseSetStream(handle, stream);
+	
+	// info("\n\n\n\n\nHola\n\n\n\n\n");
+
+	// checkCudaErrors(cudaMemcpyAsync(dev_w, v, w_size * sizeof(double), cudaMemcpyHostToDevice, stream));
+	// cusparseDbsrmv(handle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, 
+	// 	       l, w_size, nnzb, &alphaCu,
+	// 	       descr, bsrValC, bsrRowPtrC, bsrColIndC, blockDim, dev_w, &betaCu, dev_z);
+	// checkCudaErrors(cudaMemcpyAsync(dev_z, Xv, l * sizeof(double), cudaMemcpyDeviceToHost, stream));
+	// checkCudaErrors(cudaStreamSynchronize(stream));
+
+	// checkCudaErrors(cudaStreamDestroy(stream));
+	// cusparseDestroy(handle);
+	// cusparseDestroyMatDescr(descr);
 }
 
 void l2r_l2_svc_fun::subXTv(double *v, double *XTv)
@@ -538,6 +672,7 @@ void l2r_l2_svc_fun::subXTv(double *v, double *XTv)
 
 	for(i=0;i<w_size;i++)
 		XTv[i]=0;
+
 	for(i=0;i<sizeI;i++)
 		sparse_operator::axpy(v[i], x[I[i]], XTv);
 }
@@ -2611,8 +2746,8 @@ model* train(const problem *prob, const parameter *param)
 
 	if(check_regression_model(model_))
 	{
-		// model_->w = Malloc(double, w_size);
-		CudaSafeCall(cudaMallocHost((void** )&model_->w, w_size * sizeof(double)));
+		model_->w = Malloc(double, w_size);
+		// checkCudaErrors(cudaMallocHost((void** )&model_->w, w_size * sizeof(double)));
 		if(param->init_sol != NULL)
 			for(i=0;i<w_size;i++)
 				model_->w[i] = param->init_sol[i];
@@ -2673,8 +2808,8 @@ model* train(const problem *prob, const parameter *param)
 		// multi-class svm by Crammer and Singer
 		if(param->solver_type == MCSVM_CS)
 		{
-			// model_->w=Malloc(double, n*nr_class);
-			CudaSafeCall(cudaMallocHost((void** )&model_->w, n*nr_class * sizeof(double)));
+			model_->w=Malloc(double, n*nr_class);
+			// checkCudaErrors(cudaMallocHost((void** )&model_->w, n*nr_class * sizeof(double)));
 			for(i=0;i<nr_class;i++)
 				for(j=start[i];j<start[i]+count[i];j++)
 					sub_prob.y[j] = i;
@@ -2685,31 +2820,31 @@ model* train(const problem *prob, const parameter *param)
 		{
 			if(nr_class == 2)
 			{
-				// model_->w=Malloc(double, w_size);
-			  CudaSafeCall(cudaMallocHost((void** )&model_->w, w_size * sizeof(double)));
-				int e0 = start[0]+count[0];
-				k=0;
-				for(; k<e0; k++)
-					sub_prob.y[k] = +1;
-				for(; k<sub_prob.l; k++)
-					sub_prob.y[k] = -1;
+			  model_->w=Malloc(double, w_size);
+			  // checkCudaErrors(cudaMallocHost((void** )&model_->w, w_size * sizeof(double)));
+			  int e0 = start[0]+count[0];
+			  k=0;
+			  for(; k<e0; k++)
+			    sub_prob.y[k] = +1;
+			  for(; k<sub_prob.l; k++)
+			    sub_prob.y[k] = -1;
 
-				if(param->init_sol != NULL)
-					for(i=0;i<w_size;i++)
-						model_->w[i] = param->init_sol[i];
-				else
-					for(i=0;i<w_size;i++)
-						model_->w[i] = 0;
+			  if(param->init_sol != NULL)
+			    for(i=0;i<w_size;i++)
+			      model_->w[i] = param->init_sol[i];
+			  else
+			    for(i=0;i<w_size;i++)
+			      model_->w[i] = 0;
 
-				train_one(&sub_prob, param, model_->w, weighted_C[0], weighted_C[1]);
+			  train_one(&sub_prob, param, model_->w, weighted_C[0], weighted_C[1]);
 			}
 			else
 			{
-				// model_->w=Malloc(double, w_size*nr_class);
-				// double *w=Malloc(double, w_size);
-				double *w;
-				CudaSafeCall(cudaMallocHost((void** )&w, w_size * sizeof(double)));
-				CudaSafeCall(cudaMallocHost((void** )&w, w_size*nr_class * sizeof(double)));
+				model_->w=Malloc(double, w_size*nr_class);
+				double *w=Malloc(double, w_size);
+				// double *w;
+				// checkCudaErrors(cudaMallocHost((void** )&w, w_size * sizeof(double)));
+				// checkCudaErrors(cudaMallocHost((void** )&w, w_size*nr_class * sizeof(double)));
 				for(i=0;i<nr_class;i++)
 				{
 					int si = start[i];
@@ -2735,8 +2870,8 @@ model* train(const problem *prob, const parameter *param)
 					for(j=0;j<w_size;j++)
 						model_->w[j*nr_class+i] = w[j];
 				}
-				// free(w);
-				checkCuda(cudaFreeHost(w));
+				free(w);
+				// checkCudaErrors(cudaFreeHost(w));
 			}
 
 		}
@@ -3279,8 +3414,8 @@ double get_decfun_bias(const struct model *model_, int label_idx)
 void free_model_content(struct model *model_ptr)
 {
 	if(model_ptr->w != NULL)
-	  	checkCuda(cudaFreeHost(model_ptr->w));
-		// free(model_ptr->w);
+		free(model_ptr->w);
+	  	// checkCudaErrors(cudaFreeHost(model_ptr->w));
 	if(model_ptr->label != NULL)
 		free(model_ptr->label);
 }

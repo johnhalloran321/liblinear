@@ -5,6 +5,8 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <cusparse_v2.h>
+#include <helper_cuda.h>  // helper function CUDA error checking and initialization
+#include <helper_functions.h>  // helper for shared functions common to CUDA Samples
 
 #include <thrust/execution_policy.h>
 #include <thrust/host_vector.h>
