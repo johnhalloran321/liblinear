@@ -529,7 +529,7 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   checkCudaErrors(cudaFree(bsrValC));
   checkCudaErrors(cudaFree(bsrColIndC));
   checkCudaErrors(cudaFree(bsrRowPtrC));
-  
+
   // checkCudaErrors(cudaFree(dev_sub_cooValA));
   // checkCudaErrors(cudaFree(dev_sub_cooRowIndA));
   // checkCudaErrors(cudaFree(dev_sub_cooColIndA));
@@ -636,34 +636,34 @@ void l2r_l2_svc_fun::Xv(double *v, double *Xv)
 	double betaCu = 0.0;
 	int inc = 1;
 
-	feature_node **x=prob->x;
-	for(i=0;i<l;i++)
-		Xv[i]=sparse_operator::dot(v, x[i]);
+	// feature_node **x=prob->x;
+	// for(i=0;i<l;i++)
+	// 	Xv[i]=sparse_operator::dot(v, x[i]);
 
 	int blockDim = 1;
 	int mb = l;
 	int nb = prob->n;
 
 	cusparseHandle_t handle;
-	cudaStream_t stream;
-	cusparseMatDescr_t descr;
+	cudaStream_t stream1;
+	cusparseMatDescr_t descrA;
 
-	cusparseCreateMatDescr(&descr);
+	cusparseCreateMatDescr(&descrA);
 	// set handle to the same stream
-	checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+	checkCudaErrors(cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking));
 	cusparseCreate(&handle);
-	cusparseSetStream(handle, stream);
+	cusparseSetStream(handle, stream1);
 	
-	checkCudaErrors(cudaMemcpyAsync(dev_w, v, w_size * sizeof(double), cudaMemcpyHostToDevice, stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_w, v, w_size * sizeof(double), cudaMemcpyHostToDevice, stream1));
 	cusparseDbsrmv(handle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, 
 		       l, w_size, nnzb, &alphaCu,
-		       descr, bsrValC, bsrRowPtrC, bsrColIndC, blockDim, dev_w, &betaCu, dev_z);
-	checkCudaErrors(cudaMemcpyAsync(dev_z, Xv, l * sizeof(double), cudaMemcpyDeviceToHost, stream));
-	checkCudaErrors(cudaStreamSynchronize(stream));
+		       descrA, bsrValC, bsrRowPtrC, bsrColIndC, blockDim, dev_w, &betaCu, dev_z);
+	checkCudaErrors(cudaMemcpyAsync(Xv, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, stream1));
+	checkCudaErrors(cudaStreamSynchronize(stream1));
 
-	checkCudaErrors(cudaStreamDestroy(stream));
+	checkCudaErrors(cudaStreamDestroy(stream1));
 	cusparseDestroy(handle);
-	cusparseDestroyMatDescr(descr);
+	cusparseDestroyMatDescr(descrA);
 }
 
 void l2r_l2_svc_fun::subXTv(double *v, double *XTv)
