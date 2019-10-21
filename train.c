@@ -106,7 +106,9 @@ int main(int argc, char **argv)
 	const char *error_msg;
 
 	parse_command_line(argc, argv, input_file_name, model_file_name);
+	printf("n=%d,l=%d,nnz=%d\n", prob.n, prob.l, prob.nnz);
 	read_problem(input_file_name);
+	printf("n=%d,l=%d,nnz=%d\n", prob.n, prob.l, prob.nnz);
 	error_msg = check_parameter(&prob,&param);
 
 	if(error_msg)
@@ -404,10 +406,9 @@ void read_problem(const char *filename)
 	/* prob.cooValA = Malloc(double,elements+prob.l); */
 	/* prob.cooRowIndA = Malloc(int,elements+prob.l); */
 	/* prob.cooColIndA = Malloc(int,elements+prob.l); */
+	prob.nnz = elements;
 	if(prob.bias >= 0)
-	  prob.nnz = elements+prob.l;
-	else
-	  prob.nnz = elements;
+	  prob.nnz += prob.l;
 
 	max_index = 0;
 	j=0;
