@@ -373,17 +373,10 @@ protected:
   double* dev_z;
   int* dev_I;
   double* dev_C;
-  double* dev_cooValA;
-  int* dev_cooRowIndA;
-  int* dev_cooColIndA;
-  int* csrRowPtr;
-#ifdef BSR
-  double* bsrValC;
-  int* bsrColIndC;
-  int* bsrRowPtrC;
-  int nnzb; // , blockDim;
-  int blockDim; // = 4;
-#endif
+  double* dev_csrValA;
+  int* dev_csrRowIndA;
+  int* dev_csrColIndA;
+  int nnz;
   // // Submatrix
   // double* dev_sub_cooValA;
   // int* dev_sub_cooRowIndA;
@@ -396,10 +389,9 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   this->C = C;
   int l=prob->l;
   int n=prob->n;
-  int nnz = prob->nnz;
-  info("nnz=%d, n=%d, l=%d\n", nnz, n, l);
-
   nnz = 0;
+
+  info("nnz=%d, n=%d, l=%d\n", nnz, n, l);
   // Generate matrix in COO format
   for(int i=0;i<l;i++){
     feature_node *x = prob->x[i];
@@ -410,21 +402,22 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
       }
   }
 
-  double* cooValA = new double[nnz];
-  int* cooRowIndA = new int[nnz];
-  int* cooColIndA = new int[nnz];
+  double* csrValA = new double[nnz];
+  int* csrRowIndA = new int[l+1];
+  int* csrColIndA = new int[nnz];
   int ind = 0;
   info("nnz=%d, ind=%d, n=%d, l=%d\n", nnz, ind, n, l);
+  csrRowIndA[0] = 0;
   for(int i=0;i<l;i++){
     feature_node *x = prob->x[i];
     while(x->index != -1)
       {
-  	cooValA[ind] = x->value;
-  	cooRowIndA[ind] = i;
-  	cooColIndA[ind] = x->index-1;
+  	csrValA[ind] = x->value;
+  	csrColIndA[ind] = x->index-1;
   	x++;
   	ind++;
       }
+    csrRowIndA[i+1] = ind;
   }
   info("nnz=%d, ind=%d\n", nnz, ind);
   // // This will pick the best possible CUDA capable device
@@ -453,9 +446,9 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaMalloc((void** )&dev_y, l * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_C, l * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
-  checkCudaErrors(cudaMalloc((void** )&dev_cooValA, nnz * sizeof(double)));
-  checkCudaErrors(cudaMalloc((void** )&dev_cooRowIndA, nnz * sizeof(int)));
-  checkCudaErrors(cudaMalloc((void** )&dev_cooColIndA, nnz * sizeof(int)));
+  checkCudaErrors(cudaMalloc((void** )&dev_csrValA, nnz * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, nnz * sizeof(int)));
+  checkCudaErrors(cudaMalloc((void** )&dev_csrColIndA, nnz * sizeof(int)));
   // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooValA, nnz * sizeof(double)));
   // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooRowIndA, nnz * sizeof(int)));
   // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooColIndA, nnz * sizeof(int)));
@@ -471,9 +464,9 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaStreamCreateWithFlags(&stream3, cudaStreamNonBlocking));
   checkCudaErrors(cudaStreamCreateWithFlags(&stream4, cudaStreamNonBlocking));
 
-  checkCudaErrors(cudaMemcpyAsync(dev_cooValA, cooValA, nnz * sizeof(double), cudaMemcpyHostToDevice, stream1));
-  checkCudaErrors(cudaMemcpyAsync(dev_cooRowIndA, cooRowIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream2));
-  checkCudaErrors(cudaMemcpyAsync(dev_cooColIndA, cooColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream3));
+  checkCudaErrors(cudaMemcpyAsync(dev_csrValA, csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, stream1));
+  checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, csrRowIndA, (l+1) * sizeof(int), cudaMemcpyHostToDevice, stream2));
+  checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream3));
   checkCudaErrors(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream4));
   checkCudaErrors(cudaMemcpyAsync(dev_C, C, l * sizeof(double), cudaMemcpyHostToDevice, stream4));
 
@@ -482,66 +475,18 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaStreamSynchronize(stream2));
   checkCudaErrors(cudaStreamSynchronize(stream1));
 
-  delete [] cooValA;
-  delete [] cooRowIndA;
-  delete [] cooColIndA;
-
-  // convert to csr format
-  checkCudaErrors(cudaMalloc((void** )&csrRowPtr, (l+1) * sizeof(int)));
-  cusparseHandle_t handle;
-  cusparseCreate(&handle);
-  cusparseXcoo2csr(handle, dev_cooRowIndA, nnz, n, 
-  		  csrRowPtr, CUSPARSE_INDEX_BASE_ZERO);
-#ifdef BSR
-  // convert to bsr
-  cusparseMatDescr_t descrA, descrC;
-  cusparseCreateMatDescr(&descrA);
-  cusparseCreateMatDescr(&descrC);
-  cusparseDirection_t dir = CUSPARSE_DIRECTION_ROW;
-
-  blockDim = 2;
-
-  int base; //, nnzb;
-  int mb = (l + blockDim-1)/blockDim;
-  checkCudaErrors(cudaMalloc((void**)&bsrRowPtrC, sizeof(int) *(mb+1)));
-  // nnzTotalDevHostPtr points to host memory
-  int *nnzTotalDevHostPtr = &nnzb;
-  cusparseXcsr2bsrNnz(handle, dir, l, n,
-  		      descrA, csrRowPtr, dev_cooColIndA,
-  		      blockDim,
-  		      descrC, bsrRowPtrC,
-  		      nnzTotalDevHostPtr);
-  if (NULL != nnzTotalDevHostPtr){
-    nnzb = *nnzTotalDevHostPtr;
-  }else{
-    checkCudaErrors(cudaMemcpy(&nnzb, bsrRowPtrC+mb, sizeof(int), cudaMemcpyDeviceToHost));
-    checkCudaErrors(cudaMemcpy(&base, bsrRowPtrC, sizeof(int), cudaMemcpyDeviceToHost));
-    nnzb -= base;
-  }
-  checkCudaErrors(cudaMalloc((void**)&bsrColIndC, sizeof(int)*nnzb));
-  checkCudaErrors(cudaMalloc((void**)&bsrValC, sizeof(double)*(blockDim*blockDim)*nnzb));
-  cusparseDcsr2bsr(handle, dir, l, n,
-  		   descrA,
-  		   dev_cooValA, csrRowPtr, dev_cooColIndA,
-  		   blockDim,
-  		   descrC,
-  		   bsrValC, bsrRowPtrC, bsrColIndC);
-  // Destroy handle and matrix descriptors
-  cusparseDestroy(handle);
-  cusparseDestroyMatDescr(descrA);
-  cusparseDestroyMatDescr(descrC);
-
-  info("nnzb=%d\n", nnzb);
-#endif
+  delete [] csrValA;
+  delete [] csrRowIndA;
+  delete [] csrColIndA;
   // Destroy streams now
   checkCudaErrors(cudaStreamDestroy(stream1));
   checkCudaErrors(cudaStreamDestroy(stream2));
   checkCudaErrors(cudaStreamDestroy(stream3));
   checkCudaErrors(cudaStreamDestroy(stream4));
-  // Free unnecessary device memory
-  checkCudaErrors(cudaFree(dev_cooValA));
-  checkCudaErrors(cudaFree(dev_cooRowIndA));
-  checkCudaErrors(cudaFree(dev_cooColIndA));
+  // // Free unnecessary device memory
+  // checkCudaErrors(cudaFree(dev_csrValA));
+  // checkCudaErrors(cudaFree(dev_csrRowIndA));
+  // checkCudaErrors(cudaFree(dev_csrColIndA));
 }
 
 l2r_l2_svc_fun::~l2r_l2_svc_fun()
@@ -555,13 +500,10 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   checkCudaErrors(cudaFree(dev_y));
   checkCudaErrors(cudaFree(dev_C));
   checkCudaErrors(cudaFree(dev_I));
-  checkCudaErrors(cudaFree(csrRowPtr));
-  // bsr format arrays
-#ifdef BSR
-  checkCudaErrors(cudaFree(bsrValC));
-  checkCudaErrors(cudaFree(bsrColIndC));
-  checkCudaErrors(cudaFree(bsrRowPtrC));
-#endif
+
+  checkCudaErrors(cudaFree(dev_csrValA));
+  checkCudaErrors(cudaFree(dev_csrRowIndA));
+  checkCudaErrors(cudaFree(dev_csrColIndA));
 
   // checkCudaErrors(cudaFree(dev_sub_cooValA));
   // checkCudaErrors(cudaFree(dev_sub_cooRowIndA));
@@ -590,9 +532,6 @@ double l2r_l2_svc_fun::fun(double *w)
 	double alphaCu = 1.0;
 	double betaCu = 0.0;
 	int inc = 1;
-#ifdef BSR	
-	int mb = (l + blockDim-1)/blockDim;
-#endif
 	int nb = prob->n;
 	double init = 0.0;
 
@@ -602,26 +541,32 @@ double l2r_l2_svc_fun::fun(double *w)
 	thrust::multiplies<double> binary_op2;
 	cusparseHandle_t handle;
 	cudaStream_t stream;
-	cusparseMatDescr_t descrA;
-	cusparseCreateMatDescr(&descrA);
+	cusparseSpMatDescr_t matA;
+	cusparseDnVecDescr_t vecX, vecY;
+	// cusparseCreateMatDescr(&descrA);
+	// Create dense vector X
+	info("nnz=%d\n", nnz);
 	// set handle to the same stream
 	checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 	cusparseCreate(&handle);
 	cusparseSetStream(handle, stream);
 
 	// Get device ready for sparse matrix-vector multiply
-	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, stream));
-#ifdef BSR
-	info("nnzb=%d, blockdim=%d\n", nnzb, blockDim);
-	cusparseDbsrmv(handle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, 
-		       l, w_size, nnzb, &alphaCu,
-		       descrA, bsrValC, bsrRowPtrC, bsrColIndC, blockDim, dev_w, &betaCu, dev_z);
-#else
+	checkCudaErrors(cudaMemcpy(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice));
+
+	CHECK_CUSPARSE( cusparseCreateDnVec(&vecX, w_size, dev_w, CUDA_R_64F) )
+	// Create dense vector y
+	CHECK_CUSPARSE( cusparseCreateDnVec(&vecY, l, dev_z, CUDA_R_64F) )
+	// Create sparse matrix A in CSR format
+	CHECK_CUSPARSE( cusparseCreateCsr(&matA, l, w_size, nnz,
+					  dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
+					  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+					  CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F) )
 	CHECK_CUSPARSE( cusparseSpMV(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-				     &alpha, matA, dev_w, &beta, dev_z, CUDA_R_64F,
+				     &alphaCu, matA, vecX, &betaCu, vecY, CUDA_R_64F,
 				     CUSPARSE_MV_ALG_DEFAULT, NULL) )
 	
-#endif
+
 	checkCudaErrors(cudaStreamSynchronize(stream));
 	// z = y.*z
 	// thrust::transform(thrust::cuda::par.on(stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
@@ -643,8 +588,11 @@ double l2r_l2_svc_fun::fun(double *w)
 			f += C[i]*d*d;
 	}
 
-	// checkCudaErrors(cudaStreamDestroy(stream));
-	// cusparseDestroy(handle);
+	CHECK_CUSPARSE( cusparseDestroySpMat(matA) )
+	CHECK_CUSPARSE( cusparseDestroyDnVec(vecX) )
+	CHECK_CUSPARSE( cusparseDestroyDnVec(vecY) )
+	checkCudaErrors(cudaStreamDestroy(stream));
+	cusparseDestroy(handle);
 	// cusparseDestroyMatDescr(descrA);
 
 	return(f);
