@@ -567,26 +567,26 @@ double l2r_l2_svc_fun::fun(double *w)
 				     CUSPARSE_MV_ALG_DEFAULT, NULL) )
 	
 
-	checkCudaErrors(cudaStreamSynchronize(stream));
+	// checkCudaErrors(cudaStreamSynchronize(stream));
 	// z = y.*z
-	// thrust::transform(thrust::cuda::par.on(stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
+	thrust::transform(thrust::cuda::par.on(stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
 	// for z > 0, f += z.*z.*C
-	// f += thrust::inner_product(thrust::cuda::par.on(stream), dev_z, dev_z + l, dev_C, init,  binary_op, fun_multiply_op());
+	f += thrust::inner_product(thrust::cuda::par.on(stream), dev_z, dev_z + l, dev_C, init,  binary_op, fun_multiply_op());
 	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, stream));
 	checkCudaErrors(cudaStreamSynchronize(stream));
 
 	// for(i=0;i<w_size;i++)
 	// 	f += w[i]*w[i];
 	// f /= 2.0;
-	f = ddot_(&w_size, w, &inc, w, &inc) / 2.0;
+	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 
-	for(i=0;i<l;i++)
-	{
-		z[i] = y[i]*z[i];
-		double d = 1-z[i];
-		if (d > 0)
-			f += C[i]*d*d;
-	}
+	// for(i=0;i<l;i++)
+	// {
+	// 	z[i] = y[i]*z[i];
+	// 	double d = 1-z[i];
+	// 	if (d > 0)
+	// 		f += C[i]*d*d;
+	// }
 
 	CHECK_CUSPARSE( cusparseDestroySpMat(matA) )
 	CHECK_CUSPARSE( cusparseDestroyDnVec(vecX) )
