@@ -44,7 +44,7 @@ static void print_null(const char *s) {}
 
 static void (*liblinear_print_string) (const char *) = &print_string_stdout;
 
-// #if 1
+#if 1
 static void info(const char *fmt,...)
 {
 	char buf[BUFSIZ];
@@ -54,96 +54,105 @@ static void info(const char *fmt,...)
 	va_end(ap);
 	(*liblinear_print_string)(buf);
 }
-// #else
-// static void info(const char *fmt,...) {}
+#else
+static void info(const char *fmt,...) {}
+#endif
+
+#define CHECK_CUSPARSE(func)						\
+{									\
+  cusparseStatus_t status = (func);					\
+  if (status != CUSPARSE_STATUS_SUCCESS) {				\
+    printf("CUSPARSE API failed at line %d with error: %s (%d)\n",	\
+	   __LINE__, cusparseGetErrorString(status), status);		\
+    return EXIT_FAILURE;						\
+  }									\
+}
+// // Cuda error checking functions
+// #define CUDA_ERROR_CHECK
+// #define CudaSafeCall( err ) __cudaSafeCall( err, __FILE__, __LINE__ )
+// #define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
+
+// inline void __cudaSafeCall( cudaError err, const char *file, const int line )
+// {
+// #ifdef CUDA_ERROR_CHECK
+//   if ( cudaSuccess != err )
+//     {
+//       fprintf( stderr, "cudaSafeCall() failed at %s:%i : %s\n",
+// 	       file, line, cudaGetErrorString( err ) );
+//       exit( -1 );
+//     }
 // #endif
 
-// Cuda error checking functions
-#define CUDA_ERROR_CHECK
-#define CudaSafeCall( err ) __cudaSafeCall( err, __FILE__, __LINE__ )
-#define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
+//   return;
+// }
 
-inline void __cudaSafeCall( cudaError err, const char *file, const int line )
-{
-#ifdef CUDA_ERROR_CHECK
-  if ( cudaSuccess != err )
-    {
-      fprintf( stderr, "cudaSafeCall() failed at %s:%i : %s\n",
-	       file, line, cudaGetErrorString( err ) );
-      exit( -1 );
-    }
-#endif
+// inline void __cudaCheckError( const char *file, const int line )
+// {
+// #ifdef CUDA_ERROR_CHECK
+//   cudaError err = cudaGetLastError();
+//   if ( cudaSuccess != err )
+//     {
+//       fprintf( stderr, "cudaCheckError() failed at %s:%i : %s\n",
+// 	       file, line, cudaGetErrorString( err ) );
+//       exit( -1 );
+//     }
 
-  return;
-}
+//   // More careful checking. However, this will affect performance.
+//   // Comment away if needed.
+//   err = cudaDeviceSynchronize();
+//   if( cudaSuccess != err )
+//     {
+//       fprintf( stderr, "cudaCheckError() with sync failed at %s:%i : %s\n",
+// 	       file, line, cudaGetErrorString( err ) );
+//       exit( -1 );
+//     }
+// #endif
+//   return;
+// }
 
-inline void __cudaCheckError( const char *file, const int line )
-{
-#ifdef CUDA_ERROR_CHECK
-  cudaError err = cudaGetLastError();
-  if ( cudaSuccess != err )
-    {
-      fprintf( stderr, "cudaCheckError() failed at %s:%i : %s\n",
-	       file, line, cudaGetErrorString( err ) );
-      exit( -1 );
-    }
+// inline
+// cudaError_t checkCuda(cudaError_t result)
+// {
+// #if defined(CUDA_ERROR_CHECK) || defined(DEBUG) || defined(_DEBUG)
+//   if (result != cudaSuccess) {
+//     fprintf(stderr, "CUDA Runtime Error: %s\n", 
+//             cudaGetErrorString(result));
+//     assert(result == cudaSuccess);
+//   }
+// #endif
+//   return result;
+// }
 
-  // More careful checking. However, this will affect performance.
-  // Comment away if needed.
-  err = cudaDeviceSynchronize();
-  if( cudaSuccess != err )
-    {
-      fprintf( stderr, "cudaCheckError() with sync failed at %s:%i : %s\n",
-	       file, line, cudaGetErrorString( err ) );
-      exit( -1 );
-    }
-#endif
-  return;
-}
-
-inline
-cudaError_t checkCuda(cudaError_t result)
-{
-#if defined(CUDA_ERROR_CHECK) || defined(DEBUG) || defined(_DEBUG)
-  if (result != cudaSuccess) {
-    fprintf(stderr, "CUDA Runtime Error: %s\n", 
-            cudaGetErrorString(result));
-    assert(result == cudaSuccess);
-  }
-#endif
-  return result;
-}
-
-void checkCublas(cublasStatus_t s) 
-{
-  if (s != CUBLAS_STATUS_SUCCESS) {
-    switch (s) {
-    case CUBLAS_STATUS_ALLOC_FAILED:
-      std::cerr  << "CUBLAS_STATUS_ALLOC_FAILED" ;
-      break;
-    case CUBLAS_STATUS_ARCH_MISMATCH:
-      std::cerr  << "CUBLAS_STATUS_ARCH_MISMATCH" ;
-      break;
-    case CUBLAS_STATUS_EXECUTION_FAILED:
-      std::cerr  << "CUBLAS_STATUS_EXECUTION_FAILED" ;
-      break;
-    case CUBLAS_STATUS_INTERNAL_ERROR:
-      std::cerr  << "CUBLAS_STATUS_INTERNAL_ERROR" ;
-      break;
-    case CUBLAS_STATUS_INVALID_VALUE:
-      std::cerr  << "CUBLAS_STATUS_INVALID_VALUE" ;
-      break;
-    case CUBLAS_STATUS_MAPPING_ERROR:
-      std::cerr  << "CUBLAS_STATUS_MAPPING_ERROR" ;
-      break;
-    case CUBLAS_STATUS_NOT_INITIALIZED:
-      std::cerr  << "CUBLAS_STATUS_NOT_INITIALIZED" ;
-      break;
-    default:
-      std::cerr  << "CUBLAS_UNKNOWN_ERROR" ;
-    }
-  };
-}
+// void checkCublas(cublasStatus_t s) 
+// {
+//   if (s != CUBLAS_STATUS_SUCCESS) {
+//     switch (s) {
+//     case CUBLAS_STATUS_ALLOC_FAILED:
+//       std::cerr  << "CUBLAS_STATUS_ALLOC_FAILED" ;
+//       break;
+//     case CUBLAS_STATUS_ARCH_MISMATCH:
+//       std::cerr  << "CUBLAS_STATUS_ARCH_MISMATCH" ;
+//       break;
+//     case CUBLAS_STATUS_EXECUTION_FAILED:
+//       std::cerr  << "CUBLAS_STATUS_EXECUTION_FAILED" ;
+//       break;
+//     case CUBLAS_STATUS_INTERNAL_ERROR:
+//       std::cerr  << "CUBLAS_STATUS_INTERNAL_ERROR" ;
+//       break;
+//     case CUBLAS_STATUS_INVALID_VALUE:
+//       std::cerr  << "CUBLAS_STATUS_INVALID_VALUE" ;
+//       break;
+//     case CUBLAS_STATUS_MAPPING_ERROR:
+//       std::cerr  << "CUBLAS_STATUS_MAPPING_ERROR" ;
+//       break;
+//     case CUBLAS_STATUS_NOT_INITIALIZED:
+//       std::cerr  << "CUBLAS_STATUS_NOT_INITIALIZED" ;
+//       break;
+//     default:
+//       std::cerr  << "CUBLAS_UNKNOWN_ERROR" ;
+//     }
+//   };
+// }
 
 class sparse_operator
 {
@@ -368,11 +377,13 @@ protected:
   int* dev_cooRowIndA;
   int* dev_cooColIndA;
   int* csrRowPtr;
+#ifdef BSR
   double* bsrValC;
   int* bsrColIndC;
   int* bsrRowPtrC;
   int nnzb; // , blockDim;
   int blockDim; // = 4;
+#endif
   // // Submatrix
   // double* dev_sub_cooValA;
   // int* dev_sub_cooRowIndA;
@@ -481,13 +492,14 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   cusparseCreate(&handle);
   cusparseXcoo2csr(handle, dev_cooRowIndA, nnz, n, 
   		  csrRowPtr, CUSPARSE_INDEX_BASE_ZERO);
+#ifdef BSR
   // convert to bsr
   cusparseMatDescr_t descrA, descrC;
   cusparseCreateMatDescr(&descrA);
   cusparseCreateMatDescr(&descrC);
   cusparseDirection_t dir = CUSPARSE_DIRECTION_ROW;
 
-  blockDim = 4;
+  blockDim = 2;
 
   int base; //, nnzb;
   int mb = (l + blockDim-1)/blockDim;
@@ -519,6 +531,8 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   cusparseDestroyMatDescr(descrA);
   cusparseDestroyMatDescr(descrC);
 
+  info("nnzb=%d\n", nnzb);
+#endif
   // Destroy streams now
   checkCudaErrors(cudaStreamDestroy(stream1));
   checkCudaErrors(cudaStreamDestroy(stream2));
@@ -543,9 +557,11 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   checkCudaErrors(cudaFree(dev_I));
   checkCudaErrors(cudaFree(csrRowPtr));
   // bsr format arrays
+#ifdef BSR
   checkCudaErrors(cudaFree(bsrValC));
   checkCudaErrors(cudaFree(bsrColIndC));
   checkCudaErrors(cudaFree(bsrRowPtrC));
+#endif
 
   // checkCudaErrors(cudaFree(dev_sub_cooValA));
   // checkCudaErrors(cudaFree(dev_sub_cooRowIndA));
@@ -574,8 +590,9 @@ double l2r_l2_svc_fun::fun(double *w)
 	double alphaCu = 1.0;
 	double betaCu = 0.0;
 	int inc = 1;
-	// int blockDim = 1;
-	int mb = l;
+#ifdef BSR	
+	int mb = (l + blockDim-1)/blockDim;
+#endif
 	int nb = prob->n;
 	double init = 0.0;
 
@@ -592,13 +609,19 @@ double l2r_l2_svc_fun::fun(double *w)
 	cusparseCreate(&handle);
 	cusparseSetStream(handle, stream);
 
-	info("nnzb=%d\n", nnzb);
-
 	// Get device ready for sparse matrix-vector multiply
 	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, stream));
+#ifdef BSR
+	info("nnzb=%d, blockdim=%d\n", nnzb, blockDim);
 	cusparseDbsrmv(handle, CUSPARSE_DIRECTION_ROW, CUSPARSE_OPERATION_NON_TRANSPOSE, 
 		       l, w_size, nnzb, &alphaCu,
 		       descrA, bsrValC, bsrRowPtrC, bsrColIndC, blockDim, dev_w, &betaCu, dev_z);
+#else
+	CHECK_CUSPARSE( cusparseSpMV(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+				     &alpha, matA, dev_w, &beta, dev_z, CUDA_R_64F,
+				     CUSPARSE_MV_ALG_DEFAULT, NULL) )
+	
+#endif
 	checkCudaErrors(cudaStreamSynchronize(stream));
 	// z = y.*z
 	// thrust::transform(thrust::cuda::par.on(stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
