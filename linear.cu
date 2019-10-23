@@ -13,6 +13,8 @@
 extern "C" {
 #endif
 extern double ddot_(int *, double *, int *, double *, int *);
+extern int daxpy_(int *, double *, double *, int *, double *, int *);
+extern int dscal_(int *, double *, double *, int *);
 #ifdef __cplusplus
 }
 #endif
@@ -578,16 +580,14 @@ void l2r_l2_svc_fun::grad(double *w, double *g)
 	// double *y=prob->y;
 	int l=prob->l;
 	int w_size=get_nr_variable();
+	int inc = 1;
+	double alpha = 2.0;
 	// int id;
 
-	// sizeI = 0;
 	sizeI = dev_find_id(*stream, l, dev_indices, dev_z,
 			    dev_I, I);
-	// for (i=0;i<sizeI;i++){
-	//   id = I[i];
-	//   z[i] = C[id]*y[id]*(z[id]-1);
-	// }
-
+	memcpy(g, w, sizeof(double)*w_size);
+	// sizeI = 0;
 	// for (i=0;i<l;i++)
 	// 	if (z[i] < 1)
 	// 	{
@@ -596,9 +596,9 @@ void l2r_l2_svc_fun::grad(double *w, double *g)
 	// 		sizeI++;
 	// 	}
 	subXTv(z, g);
-
-	for(i=0;i<w_size;i++)
-		g[i] = w[i] + 2*g[i];
+	// daxpy_(&w_size, &one, w, &inc, g, &inc);
+	// for(i=0;i<w_size;i++)
+	// 	g[i] = w[i] + 2*g[i];
 }
 
 int l2r_l2_svc_fun::get_nr_variable(void)
@@ -665,12 +665,12 @@ void l2r_l2_svc_fun::subXTv(double *v, double *XTv)
 	double *y=prob->y;
 	feature_node **x=prob->x;
 
-	for(i=0;i<w_size;i++)
-		XTv[i]=0;
+	// for(i=0;i<w_size;i++)
+	// 	XTv[i]=0;
 
 	for(i=0;i<sizeI;i++){
 	  int ind = I[i];
-	  sparse_operator::axpy(C[ind]*y[ind]*(v[ind]-1), x[ind], XTv);
+	  sparse_operator::axpy(2*C[ind]*y[ind]*(v[ind]-1), x[ind], XTv);
 	}
 		// sparse_operator::axpy(v[i], x[I[i]], XTv);
 }
