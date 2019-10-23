@@ -578,38 +578,14 @@ double l2r_l2_svc_fun::fun(double *w)
 
 	thrust::plus<double> binary_op;
 	thrust::multiplies<double> binary_op2;
-	// cusparseHandle_t handle;
-	// cudaStream_t stream;
-	// cusparseSpMatDescr_t matA;
-	// cusparseDnVecDescr_t vecX, vecY;
-	// cusparseCreateMatDescr(&descrA);
-	// Create dense vector X
 	info("nnz=%d\n", nnz);
-	// set handle to the same stream
-	// checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-	// cusparseCreate(&handle);
-	// cusparseSetStream(handle, stream);
 
 	// Get device ready for sparse matrix-vector multiply
-	checkCudaErrors(cudaMemcpy(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice));
-
-	// CHECK_CUSPARSE( cusparseCreateDnVec(&vecX, w_size, dev_w, CUDA_R_64F) )
-	// // Create dense vector y
-	// CHECK_CUSPARSE( cusparseCreateDnVec(&vecY, l, dev_z, CUDA_R_64F) )
-	// // Create sparse matrix A in CSR format
-	// CHECK_CUSPARSE( cusparseCreateCsr(&matA, l, w_size, nnz,
-	// 				  dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
-	// 				  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
-	// 				  CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F) )
+	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
 				     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
 				     CUSPARSE_CSRMV_ALG2, NULL) )
-	// CHECK_CUSPARSE( cusparseSpMV(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-	// 			     &alphaCu, matA, vecX, &betaCu, vecY, CUDA_R_64F,
-	// 			     CUSPARSE_MV_ALG_DEFAULT, NULL) )
-	
-
-	// checkCudaErrors(cudaStreamSynchronize(stream));
+	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 	// z = y.*z
 	thrust::transform(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
 	// for z > 0, f += z.*z.*C
@@ -620,7 +596,6 @@ double l2r_l2_svc_fun::fun(double *w)
 	// for(i=0;i<w_size;i++)
 	// 	f += w[i]*w[i];
 	// f /= 2.0;
-	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 
 	// for(i=0;i<l;i++)
 	// {
@@ -629,16 +604,6 @@ double l2r_l2_svc_fun::fun(double *w)
 	// 	if (d > 0)
 	// 		f += C[i]*d*d;
 	// }
-
-	// CHECK_CUSPARSE( cusparseDestroySpMat(matA) )
-	// CHECK_CUSPARSE( cusparseDestroyDnVec(vecX) )
-	// CHECK_CUSPARSE( cusparseDestroyDnVec(vecY) )
-
-	// checkCudaErrors(cudaStreamDestroy(stream));
-	// cusparseDestroy(handle);
-
-	// cusparseDestroyMatDescr(descrA);
-
 	return(f);
 }
 
