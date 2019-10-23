@@ -377,6 +377,10 @@ protected:
   int* dev_csrRowIndA;
   int* dev_csrColIndA;
   int nnz;
+  cusparseSpMatDescr_t *matA;
+  cusparseDnVecDescr_t *vecX, *vecY;
+  cusparseHandle_t *handle;
+  cudaStream_t *stream;
   // // Submatrix
   // double* dev_sub_cooValA;
   // int* dev_sub_cooRowIndA;
@@ -470,14 +474,34 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream4));
   checkCudaErrors(cudaMemcpyAsync(dev_C, C, l * sizeof(double), cudaMemcpyHostToDevice, stream4));
 
-  checkCudaErrors(cudaStreamSynchronize(stream4));
+  delete [] csrValA;
+  delete [] csrRowIndA;
+  delete [] csrColIndA;
+
+  matA = new cusparseSpMatDescr_t;
+  vecX = new cusparseDnVecDescr_t;
+  vecY = new cusparseDnVecDescr_t;
+  stream = new cudaStream_t;
+  handle = new cusparseHandle_t;
+
+  cusparseCreateDnVec(vecX, n, dev_w, CUDA_R_64F);
+  cusparseCreateDnVec(vecY, l, dev_z, CUDA_R_64F);
+
+  checkCudaErrors(cudaStreamCreateWithFlags(stream, cudaStreamNonBlocking));
+  cusparseCreate(handle);
+  cusparseSetStream(*handle, *stream);
+
   checkCudaErrors(cudaStreamSynchronize(stream3));
   checkCudaErrors(cudaStreamSynchronize(stream2));
   checkCudaErrors(cudaStreamSynchronize(stream1));
 
-  delete [] csrValA;
-  delete [] csrRowIndA;
-  delete [] csrColIndA;
+  cusparseCreateCsr(matA, l, n, nnz,
+		    dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
+		    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+		    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+
+
+  checkCudaErrors(cudaStreamSynchronize(stream4));
   // Destroy streams now
   checkCudaErrors(cudaStreamDestroy(stream1));
   checkCudaErrors(cudaStreamDestroy(stream2));
@@ -505,6 +529,21 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   checkCudaErrors(cudaFree(dev_csrRowIndA));
   checkCudaErrors(cudaFree(dev_csrColIndA));
 
+  // CHECK_CUSPARSE( cusparseDestroySpMat(*matA) )
+  // CHECK_CUSPARSE( cusparseDestroyDnVec(*vecX) )
+  // CHECK_CUSPARSE( cusparseDestroyDnVec(*vecY) )
+  cusparseDestroySpMat(*matA);
+  cusparseDestroyDnVec(*vecX);
+  cusparseDestroyDnVec(*vecY);
+  checkCudaErrors(cudaStreamDestroy(*stream));
+  cusparseDestroy(*handle);
+
+
+  delete matA;
+  delete vecX;
+  delete vecY;
+  delete stream;
+  delete handle;
   // checkCudaErrors(cudaFree(dev_sub_cooValA));
   // checkCudaErrors(cudaFree(dev_sub_cooRowIndA));
   // checkCudaErrors(cudaFree(dev_sub_cooColIndA));
@@ -539,31 +578,31 @@ double l2r_l2_svc_fun::fun(double *w)
 
 	thrust::plus<double> binary_op;
 	thrust::multiplies<double> binary_op2;
-	cusparseHandle_t handle;
-	cudaStream_t stream;
-	cusparseSpMatDescr_t matA;
-	cusparseDnVecDescr_t vecX, vecY;
+	// cusparseHandle_t handle;
+	// cudaStream_t stream;
+	// cusparseSpMatDescr_t matA;
+	// cusparseDnVecDescr_t vecX, vecY;
 	// cusparseCreateMatDescr(&descrA);
 	// Create dense vector X
 	info("nnz=%d\n", nnz);
 	// set handle to the same stream
-	checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-	cusparseCreate(&handle);
-	cusparseSetStream(handle, stream);
+	// checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+	// cusparseCreate(&handle);
+	// cusparseSetStream(handle, stream);
 
 	// Get device ready for sparse matrix-vector multiply
 	checkCudaErrors(cudaMemcpy(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice));
 
-	CHECK_CUSPARSE( cusparseCreateDnVec(&vecX, w_size, dev_w, CUDA_R_64F) )
-	// Create dense vector y
-	CHECK_CUSPARSE( cusparseCreateDnVec(&vecY, l, dev_z, CUDA_R_64F) )
-	// Create sparse matrix A in CSR format
-	CHECK_CUSPARSE( cusparseCreateCsr(&matA, l, w_size, nnz,
-					  dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
-					  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
-					  CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F) )
-	CHECK_CUSPARSE( cusparseSpMV(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-				     &alphaCu, matA, vecX, &betaCu, vecY, CUDA_R_64F,
+	// CHECK_CUSPARSE( cusparseCreateDnVec(&vecX, w_size, dev_w, CUDA_R_64F) )
+	// // Create dense vector y
+	// CHECK_CUSPARSE( cusparseCreateDnVec(&vecY, l, dev_z, CUDA_R_64F) )
+	// // Create sparse matrix A in CSR format
+	// CHECK_CUSPARSE( cusparseCreateCsr(&matA, l, w_size, nnz,
+	// 				  dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
+	// 				  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+	// 				  CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F) )
+	CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+				     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
 				     CUSPARSE_CSRMV_ALG2, NULL) )
 	// CHECK_CUSPARSE( cusparseSpMV(handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
 	// 			     &alphaCu, matA, vecX, &betaCu, vecY, CUDA_R_64F,
@@ -572,11 +611,11 @@ double l2r_l2_svc_fun::fun(double *w)
 
 	// checkCudaErrors(cudaStreamSynchronize(stream));
 	// z = y.*z
-	thrust::transform(thrust::cuda::par.on(stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
+	thrust::transform(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
 	// for z > 0, f += z.*z.*C
-	f += thrust::inner_product(thrust::cuda::par.on(stream), dev_z, dev_z + l, dev_C, init,  binary_op, fun_multiply_op());
-	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, stream));
-	checkCudaErrors(cudaStreamSynchronize(stream));
+	f += thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_C, init,  binary_op, fun_multiply_op());
+	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
 
 	// for(i=0;i<w_size;i++)
 	// 	f += w[i]*w[i];
@@ -591,11 +630,13 @@ double l2r_l2_svc_fun::fun(double *w)
 	// 		f += C[i]*d*d;
 	// }
 
-	CHECK_CUSPARSE( cusparseDestroySpMat(matA) )
-	CHECK_CUSPARSE( cusparseDestroyDnVec(vecX) )
-	CHECK_CUSPARSE( cusparseDestroyDnVec(vecY) )
-	checkCudaErrors(cudaStreamDestroy(stream));
-	cusparseDestroy(handle);
+	// CHECK_CUSPARSE( cusparseDestroySpMat(matA) )
+	// CHECK_CUSPARSE( cusparseDestroyDnVec(vecX) )
+	// CHECK_CUSPARSE( cusparseDestroyDnVec(vecY) )
+
+	// checkCudaErrors(cudaStreamDestroy(stream));
+	// cusparseDestroy(handle);
+
 	// cusparseDestroyMatDescr(descrA);
 
 	return(f);
