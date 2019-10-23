@@ -81,6 +81,10 @@ int check_probability_model(const struct model *model);
 int check_regression_model(const struct model *model);
 void set_print_string_function(void (*print_func) (const char*));
 
+/* int dev_find_id(cudaStream_t stream, int l, int* indices, double* dev_zz, */
+/* 		int* dev_Id, int* Id); */
+
+
 #ifdef __cplusplus
 }
 #endif

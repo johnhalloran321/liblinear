@@ -67,92 +67,33 @@ static void info(const char *fmt,...) {}
     return EXIT_FAILURE;						\
   }									\
 }
-// // Cuda error checking functions
-// #define CUDA_ERROR_CHECK
-// #define CudaSafeCall( err ) __cudaSafeCall( err, __FILE__, __LINE__ )
-// #define CudaCheckError()    __cudaCheckError( __FILE__, __LINE__ )
 
-// inline void __cudaSafeCall( cudaError err, const char *file, const int line )
-// {
-// #ifdef CUDA_ERROR_CHECK
-//   if ( cudaSuccess != err )
-//     {
-//       fprintf( stderr, "cudaSafeCall() failed at %s:%i : %s\n",
-// 	       file, line, cudaGetErrorString( err ) );
-//       exit( -1 );
-//     }
-// #endif
+// CUDA: use 512 threads per block
+const int CUDA_NUM_THREADS = 512;
 
-//   return;
-// }
+// CUDA: number of blocks for threads.
+inline int GET_BLOCKS(const int N) {
+  return (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS;
+}
 
-// inline void __cudaCheckError( const char *file, const int line )
-// {
-// #ifdef CUDA_ERROR_CHECK
-//   cudaError err = cudaGetLastError();
-//   if ( cudaSuccess != err )
-//     {
-//       fprintf( stderr, "cudaCheckError() failed at %s:%i : %s\n",
-// 	       file, line, cudaGetErrorString( err ) );
-//       exit( -1 );
-//     }
+// CUDA: number of blocks for threads.
+inline int GET_BLOCKS_VAR(const int N, const int M) {
+  return (N + M - 1) / M;
+}
 
-//   // More careful checking. However, this will affect performance.
-//   // Comment away if needed.
-//   err = cudaDeviceSynchronize();
-//   if( cudaSuccess != err )
-//     {
-//       fprintf( stderr, "cudaCheckError() with sync failed at %s:%i : %s\n",
-// 	       file, line, cudaGetErrorString( err ) );
-//       exit( -1 );
-//     }
-// #endif
-//   return;
-// }
+// CUDA: grid stride looping
+#define CUDA_KERNEL_LOOP(i, n) \
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x; \
+       i < (n); \
+       i += blockDim.x * gridDim.x)
 
-// inline
-// cudaError_t checkCuda(cudaError_t result)
-// {
-// #if defined(CUDA_ERROR_CHECK) || defined(DEBUG) || defined(_DEBUG)
-//   if (result != cudaSuccess) {
-//     fprintf(stderr, "CUDA Runtime Error: %s\n", 
-//             cudaGetErrorString(result));
-//     assert(result == cudaSuccess);
-//   }
-// #endif
-//   return result;
-// }
-
-// void checkCublas(cublasStatus_t s) 
-// {
-//   if (s != CUBLAS_STATUS_SUCCESS) {
-//     switch (s) {
-//     case CUBLAS_STATUS_ALLOC_FAILED:
-//       std::cerr  << "CUBLAS_STATUS_ALLOC_FAILED" ;
-//       break;
-//     case CUBLAS_STATUS_ARCH_MISMATCH:
-//       std::cerr  << "CUBLAS_STATUS_ARCH_MISMATCH" ;
-//       break;
-//     case CUBLAS_STATUS_EXECUTION_FAILED:
-//       std::cerr  << "CUBLAS_STATUS_EXECUTION_FAILED" ;
-//       break;
-//     case CUBLAS_STATUS_INTERNAL_ERROR:
-//       std::cerr  << "CUBLAS_STATUS_INTERNAL_ERROR" ;
-//       break;
-//     case CUBLAS_STATUS_INVALID_VALUE:
-//       std::cerr  << "CUBLAS_STATUS_INVALID_VALUE" ;
-//       break;
-//     case CUBLAS_STATUS_MAPPING_ERROR:
-//       std::cerr  << "CUBLAS_STATUS_MAPPING_ERROR" ;
-//       break;
-//     case CUBLAS_STATUS_NOT_INITIALIZED:
-//       std::cerr  << "CUBLAS_STATUS_NOT_INITIALIZED" ;
-//       break;
-//     default:
-//       std::cerr  << "CUBLAS_UNKNOWN_ERROR" ;
-//     }
-//   };
-// }
+__global__ void init_indices(int* indices, int l)
+{
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(r, l) {
+    indices[r] = r;
+  }
+}
 
 class sparse_operator
 {
@@ -372,6 +313,7 @@ protected:
   double* dev_y;
   double* dev_z;
   int* dev_I;
+  int* dev_indices;
   double* dev_C;
   double* dev_csrValA;
   int* dev_csrRowIndA;
@@ -403,11 +345,17 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaMalloc((void** )&dev_y, l * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_C, l * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_I, l * sizeof(int)));
+  checkCudaErrors(cudaMalloc((void** )&dev_indices, l * sizeof(int)));
 
+  cudaStream_t stream0;
   cudaStream_t stream1;
   cudaStream_t stream2;
+  checkCudaErrors(cudaStreamCreateWithFlags(&stream0, cudaStreamNonBlocking));
   checkCudaErrors(cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking));
   checkCudaErrors(cudaStreamCreateWithFlags(&stream2, cudaStreamNonBlocking));
+
+  init_indices <<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, stream0 >>> (dev_indices, l);
   checkCudaErrors(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream1));
   checkCudaErrors(cudaMemcpyAsync(dev_C, C, l * sizeof(double), cudaMemcpyHostToDevice, stream2));
 
@@ -487,9 +435,11 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   delete [] csrRowIndA;
   delete [] csrColIndA;
 
+  checkCudaErrors(cudaStreamSynchronize(stream0));
   checkCudaErrors(cudaStreamSynchronize(stream1));
   checkCudaErrors(cudaStreamSynchronize(stream2));
   // Destroy streams now
+  checkCudaErrors(cudaStreamDestroy(stream0));
   checkCudaErrors(cudaStreamDestroy(stream1));
   checkCudaErrors(cudaStreamDestroy(stream2));
   checkCudaErrors(cudaStreamDestroy(stream3));
@@ -511,6 +461,9 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   checkCudaErrors(cudaFree(dev_w));
   checkCudaErrors(cudaFree(dev_y));
   checkCudaErrors(cudaFree(dev_C));
+
+  checkCudaErrors(cudaFree(dev_I));
+  checkCudaErrors(cudaFree(dev_indices));
   // checkCudaErrors(cudaFree(dev_I));
 
   checkCudaErrors(cudaFree(dev_csrValA));
@@ -595,21 +548,53 @@ double l2r_l2_svc_fun::fun(double *w)
 	return(f);
 }
 
+struct le1 {
+  __host__ __device__ bool operator()(const double a) const {
+    return (a < 1);
+  }
+};
+
+static int dev_find_id(cudaStream_t stream,
+		       int l, int* indices, double* dev_zz,
+		       int* dev_Id, int* Id)
+{
+  int i;
+  int* indices_end = thrust::copy_if(thrust::cuda::par.on(stream), 
+				     indices, indices + l,
+				     dev_zz,
+				     dev_Id,
+				     le1());
+  cudaStreamSynchronize(stream);
+  int sizeI = indices_end - dev_Id;
+  cudaMemcpyAsync(Id, dev_Id, sizeI * sizeof(int), cudaMemcpyDeviceToHost, stream);
+  cudaStreamSynchronize(stream);
+  return(sizeI);
+}
+
+
 void l2r_l2_svc_fun::grad(double *w, double *g)
 {
 	int i;
-	double *y=prob->y;
+	// double *y=prob->y;
 	int l=prob->l;
 	int w_size=get_nr_variable();
+	// int id;
 
-	sizeI = 0;
-	for (i=0;i<l;i++)
-		if (z[i] < 1)
-		{
-			z[sizeI] = C[i]*y[i]*(z[i]-1);
-			I[sizeI] = i;
-			sizeI++;
-		}
+	// sizeI = 0;
+	sizeI = dev_find_id(*stream, l, dev_indices, dev_z,
+			    dev_I, I);
+	// for (i=0;i<sizeI;i++){
+	//   id = I[i];
+	//   z[i] = C[id]*y[id]*(z[id]-1);
+	// }
+
+	// for (i=0;i<l;i++)
+	// 	if (z[i] < 1)
+	// 	{
+	// 		z[sizeI] = C[i]*y[i]*(z[i]-1);
+	// 		I[sizeI] = i;
+	// 		sizeI++;
+	// 	}
 	subXTv(z, g);
 
 	for(i=0;i<w_size;i++)
@@ -677,13 +662,17 @@ void l2r_l2_svc_fun::subXTv(double *v, double *XTv)
 {
 	int i;
 	int w_size=get_nr_variable();
+	double *y=prob->y;
 	feature_node **x=prob->x;
 
 	for(i=0;i<w_size;i++)
 		XTv[i]=0;
 
-	for(i=0;i<sizeI;i++)
-		sparse_operator::axpy(v[i], x[I[i]], XTv);
+	for(i=0;i<sizeI;i++){
+	  int ind = I[i];
+	  sparse_operator::axpy(C[ind]*y[ind]*(v[ind]-1), x[ind], XTv);
+	}
+		// sparse_operator::axpy(v[i], x[I[i]], XTv);
 }
 
 class l2r_l2_svr_fun: public l2r_l2_svc_fun
