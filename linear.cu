@@ -395,6 +395,22 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   int n=prob->n;
   nnz = 0;
 
+  // // Pin memory
+  checkCudaErrors(cudaMallocHost((void** )&I, l * sizeof(int)));
+  checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
+  // Cuda device side variables
+  checkCudaErrors(cudaMalloc((void** )&dev_w, n * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_y, l * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_C, l * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
+
+  cudaStream_t stream1;
+  cudaStream_t stream2;
+  checkCudaErrors(cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking));
+  checkCudaErrors(cudaStreamCreateWithFlags(&stream2, cudaStreamNonBlocking));
+  checkCudaErrors(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream1));
+  checkCudaErrors(cudaMemcpyAsync(dev_C, C, l * sizeof(double), cudaMemcpyHostToDevice, stream2));
+
   info("nnz=%d, n=%d, l=%d\n", nnz, n, l);
   // Generate matrix in COO format
   for(int i=0;i<l;i++){
@@ -424,32 +440,7 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
     csrRowIndA[i+1] = ind;
   }
   info("nnz=%d, ind=%d\n", nnz, ind);
-  // // This will pick the best possible CUDA capable device
-  // cudaDeviceProp deviceProp;
-  // int devID = findCudaDevice(argc, (const char **)argv);
 
-  // if (devID < 0) {
-  //   printf("exiting...\n");
-  //   exit(EXIT_SUCCESS);
-  // }
-
-  // checkCudaErrors(cudaGetDeviceProperties(&deviceProp, devID));
-
-  // // Statistics about the GPU device
-  // printf(
-  // 	 "> GPU device has %d Multi-Processors, SM %d.%d compute capabilities\n\n",
-  // 	 deviceProp.multiProcessorCount, deviceProp.major, deviceProp.minor);
-
-  // z = new double[l];
-  // I = new int[l];
-  // // Pin memory
-  checkCudaErrors(cudaMallocHost((void** )&I, l * sizeof(int)));
-  checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
-  // Cuda device side variables
-  checkCudaErrors(cudaMalloc((void** )&dev_w, n * sizeof(double)));
-  checkCudaErrors(cudaMalloc((void** )&dev_y, l * sizeof(double)));
-  checkCudaErrors(cudaMalloc((void** )&dev_C, l * sizeof(double)));
-  checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_csrValA, nnz * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, nnz * sizeof(int)));
   checkCudaErrors(cudaMalloc((void** )&dev_csrColIndA, nnz * sizeof(int)));
@@ -459,24 +450,16 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
 
   // Streams
   // Copy memory over to the device
-  cudaStream_t stream1;
-  cudaStream_t stream2;
   cudaStream_t stream3;
   cudaStream_t stream4;
-  checkCudaErrors(cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking));
-  checkCudaErrors(cudaStreamCreateWithFlags(&stream2, cudaStreamNonBlocking));
+  cudaStream_t stream5;
   checkCudaErrors(cudaStreamCreateWithFlags(&stream3, cudaStreamNonBlocking));
   checkCudaErrors(cudaStreamCreateWithFlags(&stream4, cudaStreamNonBlocking));
+  checkCudaErrors(cudaStreamCreateWithFlags(&stream5, cudaStreamNonBlocking));
 
-  checkCudaErrors(cudaMemcpyAsync(dev_csrValA, csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, stream1));
-  checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, csrRowIndA, (l+1) * sizeof(int), cudaMemcpyHostToDevice, stream2));
-  checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream3));
-  checkCudaErrors(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream4));
-  checkCudaErrors(cudaMemcpyAsync(dev_C, C, l * sizeof(double), cudaMemcpyHostToDevice, stream4));
-
-  delete [] csrValA;
-  delete [] csrRowIndA;
-  delete [] csrColIndA;
+  checkCudaErrors(cudaMemcpyAsync(dev_csrValA, csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, stream3));
+  checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, csrRowIndA, (l+1) * sizeof(int), cudaMemcpyHostToDevice, stream4));
+  checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, stream5));
 
   matA = new cusparseSpMatDescr_t;
   vecX = new cusparseDnVecDescr_t;
@@ -492,21 +475,26 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   cusparseSetStream(*handle, *stream);
 
   checkCudaErrors(cudaStreamSynchronize(stream3));
-  checkCudaErrors(cudaStreamSynchronize(stream2));
-  checkCudaErrors(cudaStreamSynchronize(stream1));
+  checkCudaErrors(cudaStreamSynchronize(stream4));
+  checkCudaErrors(cudaStreamSynchronize(stream5));
 
   cusparseCreateCsr(matA, l, n, nnz,
 		    dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
 		    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
 		    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
 
+  delete [] csrValA;
+  delete [] csrRowIndA;
+  delete [] csrColIndA;
 
-  checkCudaErrors(cudaStreamSynchronize(stream4));
+  checkCudaErrors(cudaStreamSynchronize(stream1));
+  checkCudaErrors(cudaStreamSynchronize(stream2));
   // Destroy streams now
   checkCudaErrors(cudaStreamDestroy(stream1));
   checkCudaErrors(cudaStreamDestroy(stream2));
   checkCudaErrors(cudaStreamDestroy(stream3));
   checkCudaErrors(cudaStreamDestroy(stream4));
+  checkCudaErrors(cudaStreamDestroy(stream5));
   // // Free unnecessary device memory
   // checkCudaErrors(cudaFree(dev_csrValA));
   // checkCudaErrors(cudaFree(dev_csrRowIndA));
