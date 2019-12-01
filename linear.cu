@@ -326,9 +326,11 @@ protected:
   cusparseHandle_t *handle;
   cudaStream_t *stream;
   // // Submatrix
-  // double* dev_sub_cooValA;
-  // int* dev_sub_cooRowIndA;
-  // int* dev_sub_cooColIndA;
+  double* dev_sub_csrValA;
+  int* dev_sub_csrRowIndA;
+  int* dev_sub_csrColIndA;
+  double* dev_sub_z;
+  double* dev_sub_C;
 };
 
 l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
@@ -392,12 +394,14 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   info("nnz=%d, ind=%d\n", nnz, ind);
 
   checkCudaErrors(cudaMalloc((void** )&dev_csrValA, nnz * sizeof(double)));
-  checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, nnz * sizeof(int)));
+  checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, (l+1) * sizeof(int)));
   checkCudaErrors(cudaMalloc((void** )&dev_csrColIndA, nnz * sizeof(int)));
-  // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooValA, nnz * sizeof(double)));
-  // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooRowIndA, nnz * sizeof(int)));
-  // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooColIndA, nnz * sizeof(int)));
-
+  // submatrix
+  checkCudaErrors(cudaMalloc((void** )&dev_sub_csrValA, nnz * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_sub_csrRowIndA, (l+1) * sizeof(int)));
+  checkCudaErrors(cudaMalloc((void** )&dev_sub_csrColIndA, nnz * sizeof(int)));
+  checkCudaErrors(cudaMalloc((void** )&dev_sub_z, l * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_sub_C, l * sizeof(double)));
   // Streams
   // Copy memory over to the device
   cudaStream_t stream3;
@@ -447,16 +451,10 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaStreamDestroy(stream3));
   checkCudaErrors(cudaStreamDestroy(stream4));
   checkCudaErrors(cudaStreamDestroy(stream5));
-  // // Free unnecessary device memory
-  // checkCudaErrors(cudaFree(dev_csrValA));
-  // checkCudaErrors(cudaFree(dev_csrRowIndA));
-  // checkCudaErrors(cudaFree(dev_csrColIndA));
 }
 
 l2r_l2_svc_fun::~l2r_l2_svc_fun()
 {
-  // delete[] z;
-  // delete[] I;
   checkCudaErrors(cudaFreeHost(z));
   checkCudaErrors(cudaFreeHost(I));
   checkCudaErrors(cudaFree(dev_z));
@@ -466,11 +464,16 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
 
   checkCudaErrors(cudaFree(dev_I));
   checkCudaErrors(cudaFree(dev_indices));
-  // checkCudaErrors(cudaFree(dev_I));
 
   checkCudaErrors(cudaFree(dev_csrValA));
   checkCudaErrors(cudaFree(dev_csrRowIndA));
   checkCudaErrors(cudaFree(dev_csrColIndA));
+  // submatrix
+  checkCudaErrors(cudaFree(dev_sub_csrValA));
+  checkCudaErrors(cudaFree(dev_sub_csrRowIndA));
+  checkCudaErrors(cudaFree(dev_sub_csrColIndA));
+  checkCudaErrors(cudaFree(dev_sub_z));
+  checkCudaErrors(cudaFree(dev_sub_C));
 
   // CHECK_CUSPARSE( cusparseDestroySpMat(*matA) )
   // CHECK_CUSPARSE( cusparseDestroyDnVec(*vecX) )
@@ -480,7 +483,6 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   cusparseDestroyDnVec(*vecY);
   checkCudaErrors(cudaStreamDestroy(*stream));
   cusparseDestroy(*handle);
-
 
   delete matA;
   delete vecX;
@@ -494,13 +496,7 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
 
 struct fun_multiply_op {
   __host__ __device__ double operator()(const double a, const double b) const {
-    // double d = 1-a;
-    // if(d > 0)
-    //   return(b * d * d);
-    // else
-    //   return(0.0);
     return (1-a)*(1-a)*b*((1 -a) > 0);
-    // return a*a*b*(a > 0);
   }
 };
 
@@ -556,6 +552,30 @@ struct le1 {
   }
 };
 
+__global__ void sub_mem_copy_all(double* dev_csrValA, int* dev_csrRowIndA, int* dev_csrColIndA,
+				 double* dev_sub_csrValA, int* dev_sub_csrRowIndA, int* dev_sub_csrColIndA, 
+				 double* C, double* C_sub, double* z, double* z_sub, double* Y,
+				 int* Id, 
+				 int sizeI, int n, int m)
+{
+  int totEls = 0;
+  dev_sub_csrRowIndA[0] = 0;
+  CUDA_KERNEL_LOOP(r, n) {
+    int Idr = Id[r];
+    int numEls = dev_csrRowIndA[Idr+1] - dev_csrRowIndA[Idr];
+    int currStartInd = dev_csrRowIndA[Idr];
+    double c = C[Idr];
+    // note that Idr >= r by construction
+    C_sub[r] = c;
+    z_sub[r] = c * Y[Idr] * (z[Idr] -1);
+    for(int k = 0; k < numEls; k++){
+      dev_sub_csrValA[totEls] = dev_sub_csrValA[currStartInd];
+      dev_sub_csrColIndA[totEls++] = dev_csrColIndA[currStartInd++];
+    }
+    dev_sub_csrRowIndA[r+1] = totEls;
+  }
+}
+
 static int dev_find_id(cudaStream_t stream,
 		       int l, int* indices, double* dev_zz,
 		       int* dev_Id, int* Id)
@@ -573,6 +593,22 @@ static int dev_find_id(cudaStream_t stream,
   return(sizeI);
 }
 
+void l2r_l2_svc_fun::subXTv(double *v, double *XTv)
+{
+	int i;
+	int w_size=get_nr_variable();
+	double *y=prob->y;
+	feature_node **x=prob->x;
+
+	// for(i=0;i<w_size;i++)
+	// 	XTv[i]=0;
+
+	for(i=0;i<sizeI;i++){
+	  int ind = I[i];
+	  sparse_operator::axpy(2*C[ind]*y[ind]*(v[ind]-1), x[ind], XTv);
+	}
+		// sparse_operator::axpy(v[i], x[I[i]], XTv);
+}
 
 void l2r_l2_svc_fun::grad(double *w, double *g)
 {
@@ -656,23 +692,6 @@ void l2r_l2_svc_fun::Xv(double *v, double *Xv)
 	feature_node **x=prob->x;
 	for(i=0;i<l;i++)
 		Xv[i]=sparse_operator::dot(v, x[i]);
-}
-
-void l2r_l2_svc_fun::subXTv(double *v, double *XTv)
-{
-	int i;
-	int w_size=get_nr_variable();
-	double *y=prob->y;
-	feature_node **x=prob->x;
-
-	// for(i=0;i<w_size;i++)
-	// 	XTv[i]=0;
-
-	for(i=0;i<sizeI;i++){
-	  int ind = I[i];
-	  sparse_operator::axpy(2*C[ind]*y[ind]*(v[ind]-1), x[ind], XTv);
-	}
-		// sparse_operator::axpy(v[i], x[I[i]], XTv);
 }
 
 class l2r_l2_svr_fun: public l2r_l2_svc_fun
