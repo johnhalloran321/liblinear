@@ -331,6 +331,7 @@ protected:
   int* dev_sub_csrColIndA;
   double* dev_sub_z;
   double* dev_sub_C;
+  int* totEls;
 };
 
 l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
@@ -351,6 +352,7 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_I, l * sizeof(int)));
   checkCudaErrors(cudaMalloc((void** )&dev_indices, l * sizeof(int)));
+  checkCudaErrors(cudaMalloc(&totEls, sizeof(int)));
 
   cudaStream_t stream0;
   cudaStream_t stream1;
@@ -474,10 +476,8 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   checkCudaErrors(cudaFree(dev_sub_csrColIndA));
   checkCudaErrors(cudaFree(dev_sub_z));
   checkCudaErrors(cudaFree(dev_sub_C));
+  checkCudaErrors(cudaFree(totEls));
 
-  // CHECK_CUSPARSE( cusparseDestroySpMat(*matA) )
-  // CHECK_CUSPARSE( cusparseDestroyDnVec(*vecX) )
-  // CHECK_CUSPARSE( cusparseDestroyDnVec(*vecY) )
   cusparseDestroySpMat(*matA);
   cusparseDestroyDnVec(*vecX);
   cusparseDestroyDnVec(*vecY);
@@ -552,15 +552,17 @@ struct le1 {
   }
 };
 
+// __device__ int totEls;
+
 __global__ void sub_mem_copy_all(double* dev_csrValA, int* dev_csrRowIndA, int* dev_csrColIndA,
 				 double* dev_sub_csrValA, int* dev_sub_csrRowIndA, int* dev_sub_csrColIndA, 
 				 double* C, double* C_sub, double* z, double* z_sub, double* Y,
 				 int* Id, 
-				 int sizeI, int n, int m)
+				 int sizeI, int l, int * totEls)
 {
-  int totEls = 0;
+  *totEls = 0;
   dev_sub_csrRowIndA[0] = 0;
-  CUDA_KERNEL_LOOP(r, n) {
+  CUDA_KERNEL_LOOP(r, sizeI) {
     int Idr = Id[r];
     int numEls = dev_csrRowIndA[Idr+1] - dev_csrRowIndA[Idr];
     int currStartInd = dev_csrRowIndA[Idr];
@@ -569,10 +571,10 @@ __global__ void sub_mem_copy_all(double* dev_csrValA, int* dev_csrRowIndA, int* 
     C_sub[r] = c;
     z_sub[r] = c * Y[Idr] * (z[Idr] -1);
     for(int k = 0; k < numEls; k++){
-      dev_sub_csrValA[totEls] = dev_sub_csrValA[currStartInd];
-      dev_sub_csrColIndA[totEls++] = dev_csrColIndA[currStartInd++];
+      dev_sub_csrValA[*totEls] = dev_sub_csrValA[currStartInd];
+      dev_sub_csrColIndA[(*totEls)++] = dev_csrColIndA[currStartInd++];
     }
-    dev_sub_csrRowIndA[r+1] = totEls;
+    dev_sub_csrRowIndA[r+1] = *totEls;
   }
 }
 
@@ -600,13 +602,23 @@ void l2r_l2_svc_fun::subXTv(double *v, double *XTv)
 	double *y=prob->y;
 	feature_node **x=prob->x;
 
+	int sub_nnz = 0;
+
 	// for(i=0;i<w_size;i++)
 	// 	XTv[i]=0;
 
 	for(i=0;i<sizeI;i++){
 	  int ind = I[i];
 	  sparse_operator::axpy(2*C[ind]*y[ind]*(v[ind]-1), x[ind], XTv);
+
+	  // double check sub_nnz value
+	  feature_node *xind = prob->x[i];
+	  while(xind->index!=-1){
+	    sub_nnz++;
+	    xind++;
+	  }
 	}
+	info("computed sub_nnz=%d\n", sub_nnz);
 		// sparse_operator::axpy(v[i], x[I[i]], XTv);
 }
 
@@ -618,10 +630,23 @@ void l2r_l2_svc_fun::grad(double *w, double *g)
 	int w_size=get_nr_variable();
 	int inc = 1;
 	double alpha = 2.0;
-	// int id;
+	int sub_nnz = 0;
+	double alphaCu = 1.0;
+	double betaCu = 0.0;
 
 	sizeI = dev_find_id(*stream, l, dev_indices, dev_z,
 			    dev_I, I);
+
+	sub_mem_copy_all <<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+	  (dev_csrValA, dev_csrRowIndA, dev_csrColIndA,
+	   dev_sub_csrValA, dev_sub_csrRowIndA, dev_sub_csrColIndA, 
+	   dev_C, dev_sub_C, dev_z, dev_sub_z, dev_y, dev_I, sizeI, l, totEls);
+	// checkCudaErrors(cudaMemcpyAsync(&sub_nnz, &totEls, sizeof(int), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaMemcpy(&sub_nnz, totEls, sizeof(int), cudaMemcpyDeviceToHost));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
+	info("totEls=%d\n", totEls);
+	// cudaMemcpyFromSymbol(&sub_nnz, totEls, sizeof(int), cudaMemcpyDeviceToHost);
+
 	memcpy(g, w, sizeof(double)*w_size);
 	// sizeI = 0;
 	// for (i=0;i<l;i++)
