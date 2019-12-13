@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <locale.h>
+#include <time.h>
 #include "linear.h"
 #include "tron.h"
 #include <helper_cuda.h>  // helper function CUDA error checking and initialization
@@ -339,6 +340,11 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   int n=prob->n;
   nnz = 0;
 
+  // time how long initializig the device is taking
+  time_t startSVMTime;
+  time(&startSVMTime);
+  clock_t startSVMClock = clock();
+
   // // Pin memory
   checkCudaErrors(cudaMallocHost((void** )&I, l * sizeof(int)));
   checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
@@ -360,6 +366,10 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   init_indices <<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, stream0 >>> (dev_indices, l);
   checkCudaErrors(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream1));
   checkCudaErrors(cudaMemcpyAsync(dev_C, C, l * sizeof(double), cudaMemcpyHostToDevice, stream2));
+
+  time_t startCsrMatTime;
+  time(&startCsrMatTime);
+  clock_t startCsrMatClock = clock();
 
   info("nnz=%d, n=%d, l=%d\n", nnz, n, l);
   // Generate matrix in COO format
@@ -390,6 +400,14 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
     csrRowIndA[i+1] = ind;
   }
   info("nnz=%d, ind=%d\n", nnz, ind);
+
+  time_t procCsrMatTime;
+  time(&procCsrMatTime);
+  clock_t procCsrMatClock = clock();
+  double diffCsr = difftime(procCsrMatTime,startCsrMatTime);
+
+  info("Constructing the CSR matrix took = %f cpu seconds, %f seconds wall clock time.\n", 
+       ((double)(procCsrMatClock - startCsrMatClock)) / (double)CLOCKS_PER_SEC, diffCsr);
 
   checkCudaErrors(cudaMalloc((void** )&dev_csrValA, nnz * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, nnz * sizeof(int)));
@@ -432,6 +450,14 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
 		    dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
 		    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
 		    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+
+  time_t procSVMStart;
+  clock_t procSVMStartClock = clock();
+  time(&procSVMStart);
+  double diffSVM = difftime(procSVMStart,startSVMTime);
+
+  info("Device initialization took = %f cpu seconds, %f seconds wall clock time.\n", 
+       ((double)(procSVMStartClock - startSVMClock)) / (double)CLOCKS_PER_SEC, diffSVM);
 
   delete [] csrValA;
   delete [] csrRowIndA;
@@ -527,7 +553,7 @@ double l2r_l2_svc_fun::fun(double *w)
 	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
 				     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
-				     CUSPARSE_CSRMV_ALG2, NULL) )
+				     CUSPARSE_CSRMV_ALG1, NULL) )
 	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 	// z = y.*z
 	thrust::transform(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
@@ -577,28 +603,26 @@ static int dev_find_id(cudaStream_t stream,
 void l2r_l2_svc_fun::grad(double *w, double *g)
 {
 	int i;
-	// double *y=prob->y;
+	double *y=prob->y;
 	int l=prob->l;
 	int w_size=get_nr_variable();
-	int inc = 1;
-	double alpha = 2.0;
-	// int id;
+	// sizeI = dev_find_id(*stream, l, dev_indices, dev_z,
+	// 		    dev_I, I);
+	// memcpy(g, w, sizeof(double)*w_size);
+	// subXTv(z, g);
 
-	sizeI = dev_find_id(*stream, l, dev_indices, dev_z,
-			    dev_I, I);
-	memcpy(g, w, sizeof(double)*w_size);
-	// sizeI = 0;
-	// for (i=0;i<l;i++)
-	// 	if (z[i] < 1)
-	// 	{
-	// 		z[sizeI] = C[i]*y[i]*(z[i]-1);
-	// 		I[sizeI] = i;
-	// 		sizeI++;
-	// 	}
+	sizeI = 0;
+	for (i=0;i<l;i++)
+		if (z[i] < 1)
+		{
+			z[sizeI] = C[i]*y[i]*(z[i]-1);
+			I[sizeI] = i;
+			sizeI++;
+		}
 	subXTv(z, g);
-	// daxpy_(&w_size, &one, w, &inc, g, &inc);
-	// for(i=0;i<w_size;i++)
-	// 	g[i] = w[i] + 2*g[i];
+
+	for(i=0;i<w_size;i++)
+		g[i] = w[i] + 2*g[i];
 }
 
 int l2r_l2_svc_fun::get_nr_variable(void)
@@ -665,14 +689,16 @@ void l2r_l2_svc_fun::subXTv(double *v, double *XTv)
 	double *y=prob->y;
 	feature_node **x=prob->x;
 
-	// for(i=0;i<w_size;i++)
-	// 	XTv[i]=0;
+	for(i=0;i<w_size;i++)
+		XTv[i]=0;
+	for(i=0;i<sizeI;i++)
+		sparse_operator::axpy(v[i], x[I[i]], XTv);
 
-	for(i=0;i<sizeI;i++){
-	  int ind = I[i];
-	  sparse_operator::axpy(2*C[ind]*y[ind]*(v[ind]-1), x[ind], XTv);
-	}
-		// sparse_operator::axpy(v[i], x[I[i]], XTv);
+	// for(i=0;i<sizeI;i++){
+	//   int ind = I[i];
+	//   sparse_operator::axpy(2*C[ind]*y[ind]*(v[ind]-1), x[ind], XTv);
+	// }
+
 }
 
 class l2r_l2_svr_fun: public l2r_l2_svc_fun
