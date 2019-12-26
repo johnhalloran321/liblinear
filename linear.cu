@@ -338,7 +338,7 @@ protected:
   // int* dev_sub_cooColIndA;
   // double* dev_sub_z;
   // double* dev_sub_C;
-  int* totEls;
+  // int* totEls;
 };
 
 l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
@@ -359,7 +359,7 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_I, l * sizeof(int)));
   checkCudaErrors(cudaMalloc((void** )&dev_indices, l * sizeof(int)));
-  checkCudaErrors(cudaMalloc(&totEls, sizeof(int)));
+  // checkCudaErrors(cudaMalloc(&totEls, sizeof(int)));
 
   stream = new cudaStream_t;
   streamB = new cudaStream_t;
@@ -489,7 +489,7 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   // checkCudaErrors(cudaFree(dev_sub_cooColIndA));
   // checkCudaErrors(cudaFree(dev_sub_z));
   // checkCudaErrors(cudaFree(dev_sub_C));
-  checkCudaErrors(cudaFree(totEls));
+  // checkCudaErrors(cudaFree(totEls));
 
   cusparseDestroySpMat(*matA);
   cusparseDestroyDnVec(*vecX);
