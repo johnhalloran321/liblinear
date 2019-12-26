@@ -559,7 +559,6 @@ double l2r_l2_svc_fun::fun(double *w)
 	thrust::transform(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
 	// for z > 0, f += z.*z.*C
 	f += thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_C, init,  binary_op, fun_multiply_op());
-	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	checkCudaErrors(cudaStreamSynchronize(*stream));
 
 	// for(i=0;i<w_size;i++)
@@ -573,6 +572,7 @@ double l2r_l2_svc_fun::fun(double *w)
 	// 	if (d > 0)
 	// 		f += C[i]*d*d;
 	// }
+	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	return(f);
 }
 
@@ -610,6 +610,7 @@ void l2r_l2_svc_fun::grad(double *w, double *g)
 	// 		    dev_I, I);
 	// memcpy(g, w, sizeof(double)*w_size);
 	// subXTv(z, g);
+	checkCudaErrors(cudaStreamSynchronize(*stream));
 
 	sizeI = 0;
 	for (i=0;i<l;i++)
