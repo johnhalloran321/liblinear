@@ -2771,8 +2771,8 @@ model* train(const problem *prob, const parameter *param)
 
 	if(check_regression_model(model_))
 	{
-		model_->w = Malloc(double, w_size);
-		// checkCudaErrors(cudaMallocHost((void** )&model_->w, w_size * sizeof(double)));
+		// model_->w = Malloc(double, w_size);
+		checkCudaErrors(cudaMallocHost((void** )&(model_->w), w_size * sizeof(double)));
 		if(param->init_sol != NULL)
 			for(i=0;i<w_size;i++)
 				model_->w[i] = param->init_sol[i];
@@ -2833,8 +2833,8 @@ model* train(const problem *prob, const parameter *param)
 		// multi-class svm by Crammer and Singer
 		if(param->solver_type == MCSVM_CS)
 		{
-			model_->w=Malloc(double, n*nr_class);
-			// checkCudaErrors(cudaMallocHost((void** )&model_->w, n*nr_class * sizeof(double)));
+			// model_->w=Malloc(double, n*nr_class);
+			checkCudaErrors(cudaMallocHost((void** )&(model_->w), n*nr_class * sizeof(double)));
 			for(i=0;i<nr_class;i++)
 				for(j=start[i];j<start[i]+count[i];j++)
 					sub_prob.y[j] = i;
@@ -2845,8 +2845,8 @@ model* train(const problem *prob, const parameter *param)
 		{
 			if(nr_class == 2)
 			{
-			  model_->w=Malloc(double, w_size);
-			  // checkCudaErrors(cudaMallocHost((void** )&model_->w, w_size * sizeof(double)));
+			  // model_->w=Malloc(double, w_size);
+			  checkCudaErrors(cudaMallocHost((void** )&(model_->w), w_size * sizeof(double)));
 			  int e0 = start[0]+count[0];
 			  k=0;
 			  for(; k<e0; k++)
@@ -2865,10 +2865,12 @@ model* train(const problem *prob, const parameter *param)
 			}
 			else
 			{
-				model_->w=Malloc(double, w_size*nr_class);
-				double *w=Malloc(double, w_size);
-				// double *w;
-				// checkCudaErrors(cudaMallocHost((void** )&w, w_size * sizeof(double)));
+				// model_->w=Malloc(double, w_size*nr_class);
+				// double *w=Malloc(double, w_size);
+
+				double *w;
+				checkCudaErrors(cudaMallocHost((void** )&(model_->w), w_size * nr_class * sizeof(double)));
+				checkCudaErrors(cudaMallocHost((void** )&w, w_size * sizeof(double)));
 				// checkCudaErrors(cudaMallocHost((void** )&w, w_size*nr_class * sizeof(double)));
 				for(i=0;i<nr_class;i++)
 				{
@@ -2895,8 +2897,8 @@ model* train(const problem *prob, const parameter *param)
 					for(j=0;j<w_size;j++)
 						model_->w[j*nr_class+i] = w[j];
 				}
-				free(w);
-				// checkCudaErrors(cudaFreeHost(w));
+				// free(w);
+				checkCudaErrors(cudaFreeHost(w));
 			}
 
 		}
@@ -3439,8 +3441,8 @@ double get_decfun_bias(const struct model *model_, int label_idx)
 void free_model_content(struct model *model_ptr)
 {
 	if(model_ptr->w != NULL)
-		free(model_ptr->w);
-	  	// checkCudaErrors(cudaFreeHost(model_ptr->w));
+		// free(model_ptr->w);
+	  	checkCudaErrors(cudaFreeHost(model_ptr->w));
 	if(model_ptr->label != NULL)
 		free(model_ptr->label);
 }
