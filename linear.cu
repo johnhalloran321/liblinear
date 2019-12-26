@@ -326,6 +326,7 @@ protected:
   cusparseDnVecDescr_t *vecX, *vecY;
   cusparseHandle_t *handle;
   cudaStream_t *stream;
+  cudaStream_t *streamB;
   // // Submatrix
   // double* dev_sub_cooValA;
   // int* dev_sub_cooRowIndA;
@@ -433,12 +434,14 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   vecX = new cusparseDnVecDescr_t;
   vecY = new cusparseDnVecDescr_t;
   stream = new cudaStream_t;
+  streamB = new cudaStream_t;
   handle = new cusparseHandle_t;
 
   cusparseCreateDnVec(vecX, n, dev_w, CUDA_R_64F);
   cusparseCreateDnVec(vecY, l, dev_z, CUDA_R_64F);
 
   checkCudaErrors(cudaStreamCreateWithFlags(stream, cudaStreamNonBlocking));
+  checkCudaErrors(cudaStreamCreateWithFlags(streamB, cudaStreamNonBlocking));
   cusparseCreate(handle);
   cusparseSetStream(*handle, *stream);
 
@@ -505,6 +508,7 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   cusparseDestroyDnVec(*vecX);
   cusparseDestroyDnVec(*vecY);
   checkCudaErrors(cudaStreamDestroy(*stream));
+  checkCudaErrors(cudaStreamDestroy(*streamB));
   cusparseDestroy(*handle);
 
 
@@ -512,6 +516,7 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   delete vecX;
   delete vecY;
   delete stream;
+  delete streamB;
   delete handle;
   // checkCudaErrors(cudaFree(dev_sub_cooValA));
   // checkCudaErrors(cudaFree(dev_sub_cooRowIndA));
@@ -559,6 +564,8 @@ double l2r_l2_svc_fun::fun(double *w)
 	thrust::transform(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
 	// for z > 0, f += z.*z.*C
 	f += thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_C, init,  binary_op, fun_multiply_op());
+
+	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
 	checkCudaErrors(cudaStreamSynchronize(*stream));
 
 	// for(i=0;i<w_size;i++)
@@ -572,7 +579,7 @@ double l2r_l2_svc_fun::fun(double *w)
 	// 	if (d > 0)
 	// 		f += C[i]*d*d;
 	// }
-	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+
 	return(f);
 }
 
@@ -609,8 +616,10 @@ void l2r_l2_svc_fun::grad(double *w, double *g)
 	// sizeI = dev_find_id(*stream, l, dev_indices, dev_z,
 	// 		    dev_I, I);
 	// memcpy(g, w, sizeof(double)*w_size);
+	// checkCudaErrors(cudaStreamSynchronize(*streamB));
 	// subXTv(z, g);
-	checkCudaErrors(cudaStreamSynchronize(*stream));
+
+	checkCudaErrors(cudaStreamSynchronize(*streamB));
 
 	sizeI = 0;
 	for (i=0;i<l;i++)
