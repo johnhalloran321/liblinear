@@ -326,6 +326,7 @@ protected:
   cusparseHandle_t *handle;
   cudaStream_t *stream;
   cudaStream_t *streamB;
+  cudaStream_t *streamC;
   // // Submatrix
   // double* dev_sub_cooValA;
   // int* dev_sub_cooRowIndA;
@@ -354,6 +355,13 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaMalloc((void** )&dev_I, l * sizeof(int)));
   checkCudaErrors(cudaMalloc((void** )&dev_indices, l * sizeof(int)));
   checkCudaErrors(cudaMalloc(&totEls, sizeof(int)));
+
+  stream = new cudaStream_t;
+  streamB = new cudaStream_t;
+  streamC = new cudaStream_t;
+  checkCudaErrors(cudaStreamCreateWithFlags(stream, cudaStreamNonBlocking));
+  checkCudaErrors(cudaStreamCreateWithFlags(streamB, cudaStreamNonBlocking));
+  checkCudaErrors(cudaStreamCreateWithFlags(streamC, cudaStreamNonBlocking));
 
   cudaStream_t stream0;
   cudaStream_t stream1;
@@ -442,15 +450,11 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   matA = new cusparseSpMatDescr_t;
   vecX = new cusparseDnVecDescr_t;
   vecY = new cusparseDnVecDescr_t;
-  stream = new cudaStream_t;
-  streamB = new cudaStream_t;
   handle = new cusparseHandle_t;
 
   cusparseCreateDnVec(vecX, n, dev_w, CUDA_R_64F);
   cusparseCreateDnVec(vecY, l, dev_z, CUDA_R_64F);
 
-  checkCudaErrors(cudaStreamCreateWithFlags(stream, cudaStreamNonBlocking));
-  checkCudaErrors(cudaStreamCreateWithFlags(streamB, cudaStreamNonBlocking));
   cusparseCreate(handle);
   cusparseSetStream(*handle, *stream);
 
@@ -512,6 +516,7 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   cusparseDestroyDnVec(*vecY);
   checkCudaErrors(cudaStreamDestroy(*stream));
   checkCudaErrors(cudaStreamDestroy(*streamB));
+  checkCudaErrors(cudaStreamDestroy(*streamC));
   cusparseDestroy(*handle);
 
   delete matA;
@@ -519,11 +524,18 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   delete vecY;
   delete stream;
   delete streamB;
+  delete streamC;
   delete handle;
   // checkCudaErrors(cudaFree(dev_sub_cooValA));
   // checkCudaErrors(cudaFree(dev_sub_cooRowIndA));
   // checkCudaErrors(cudaFree(dev_sub_cooColIndA));
 }
+
+struct le1 {
+  __host__ __device__ bool operator()(const double a) const {
+    return (a < 1);
+  }
+};
 
 struct fun_multiply_op {
   __host__ __device__ double operator()(const double a, const double b) const {
@@ -560,9 +572,19 @@ double l2r_l2_svc_fun::fun(double *w)
 	thrust::transform(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
 	// for z > 0, f += z.*z.*C
 	f += thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_C, init,  binary_op, fun_multiply_op());
+
+	int* indices_end = thrust::copy_if(thrust::cuda::par.on(*stream), 
+					   dev_indices, dev_indices + l,
+					   dev_z,
+					   dev_I,
+					   le1());
+
 	checkCudaErrors(cudaStreamSynchronize(*stream));
 
+	sizeI = indices_end - dev_I;
+
 	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
+	cudaMemcpyAsync(I, dev_I, sizeI * sizeof(int), cudaMemcpyDeviceToHost, *stream);
 	// for(i=0;i<w_size;i++)
 	// 	f += w[i]*w[i];
 	// f /= 2.0;
@@ -576,12 +598,6 @@ double l2r_l2_svc_fun::fun(double *w)
 	// }
 	return(f);
 }
-
-struct le1 {
-  __host__ __device__ bool operator()(const double a) const {
-    return (a < 1);
-  }
-};
 
 // __device__ int totEls;
 
@@ -633,23 +649,24 @@ void l2r_l2_svc_fun::subXTv(double *v, double *XTv)
 	double *y=prob->y;
 	feature_node **x=prob->x;
 
-	int sub_nnz = 0;
+	// int sub_nnz = 0;
 
 	// for(i=0;i<w_size;i++)
 	// 	XTv[i]=0;
 	checkCudaErrors(cudaStreamSynchronize(*streamB));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
 	for(i=0;i<sizeI;i++){
 	  int ind = I[i];
 	  sparse_operator::axpy(2*C[ind]*y[ind]*(v[ind]-1), x[ind], XTv);
 
-	  // double check sub_nnz value
-	  feature_node *xind = prob->x[i];
-	  while(xind->index!=-1){
-	    sub_nnz++;
-	    xind++;
-	  }
+	  // // double check sub_nnz value
+	  // feature_node *xind = prob->x[i];
+	  // while(xind->index!=-1){
+	  //   sub_nnz++;
+	  //   xind++;
+	  // }
 	}
-	info("computed sub_nnz=%d\n", sub_nnz);
+	// info("computed sub_nnz=%d\n", sub_nnz);
 		// sparse_operator::axpy(v[i], x[I[i]], XTv);
 }
 
@@ -665,8 +682,8 @@ void l2r_l2_svc_fun::grad(double *w, double *g)
 	double alphaCu = 1.0;
 	double betaCu = 0.0;
 
-	sizeI = dev_find_id(*stream, *streamB, l, dev_indices, dev_z,
-			    dev_I, I);
+	// sizeI = dev_find_id(*stream, *streamB, l, dev_indices, dev_z,
+	// 		    dev_I, I);
 
 	// sub_mem_copy_all <<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
 	//   (dev_cooValA, dev_cooRowIndA, dev_cooColIndA,
