@@ -313,11 +313,7 @@ protected:
   const problem *prob;
   // Cuda variables
   double* dev_w;
-  double* dev_y;
   double* dev_z;
-  int* dev_I;
-  int* dev_indices;
-  double* dev_C;
   double* dev_csrValA;
   int* dev_csrRowIndA;
   int* dev_csrColIndA;
@@ -346,27 +342,12 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   time(&startSVMTime);
   clock_t startSVMClock = clock();
 
+  I = new int[l];
   // // Pin memory
-  checkCudaErrors(cudaMallocHost((void** )&I, l * sizeof(int)));
   checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
   // Cuda device side variables
   checkCudaErrors(cudaMalloc((void** )&dev_w, n * sizeof(double)));
-  checkCudaErrors(cudaMalloc((void** )&dev_y, l * sizeof(double)));
-  checkCudaErrors(cudaMalloc((void** )&dev_C, l * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
-  checkCudaErrors(cudaMalloc((void** )&dev_I, l * sizeof(int)));
-  checkCudaErrors(cudaMalloc((void** )&dev_indices, l * sizeof(int)));
-
-  cudaStream_t stream0;
-  cudaStream_t stream1;
-  cudaStream_t stream2;
-  checkCudaErrors(cudaStreamCreateWithFlags(&stream0, cudaStreamNonBlocking));
-  checkCudaErrors(cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking));
-  checkCudaErrors(cudaStreamCreateWithFlags(&stream2, cudaStreamNonBlocking));
-
-  init_indices <<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, stream0 >>> (dev_indices, l);
-  checkCudaErrors(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, stream1));
-  checkCudaErrors(cudaMemcpyAsync(dev_C, C, l * sizeof(double), cudaMemcpyHostToDevice, stream2));
 
   time_t startCsrMatTime;
   time(&startCsrMatTime);
@@ -413,9 +394,6 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaMalloc((void** )&dev_csrValA, nnz * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, nnz * sizeof(int)));
   checkCudaErrors(cudaMalloc((void** )&dev_csrColIndA, nnz * sizeof(int)));
-  // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooValA, nnz * sizeof(double)));
-  // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooRowIndA, nnz * sizeof(int)));
-  // checkCudaErrors(cudaMalloc((void** )&dev_sub_cooColIndA, nnz * sizeof(int)));
 
   // Streams
   // Copy memory over to the device
@@ -466,44 +444,23 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   delete [] csrRowIndA;
   delete [] csrColIndA;
 
-  checkCudaErrors(cudaStreamSynchronize(stream0));
-  checkCudaErrors(cudaStreamSynchronize(stream1));
-  checkCudaErrors(cudaStreamSynchronize(stream2));
-  // Destroy streams now
-  checkCudaErrors(cudaStreamDestroy(stream0));
-  checkCudaErrors(cudaStreamDestroy(stream1));
-  checkCudaErrors(cudaStreamDestroy(stream2));
   checkCudaErrors(cudaStreamDestroy(stream3));
   checkCudaErrors(cudaStreamDestroy(stream4));
   checkCudaErrors(cudaStreamDestroy(stream5));
-  // // Free unnecessary device memory
-  // checkCudaErrors(cudaFree(dev_csrValA));
-  // checkCudaErrors(cudaFree(dev_csrRowIndA));
-  // checkCudaErrors(cudaFree(dev_csrColIndA));
 }
 
 l2r_l2_svc_fun::~l2r_l2_svc_fun()
 {
-  // delete[] z;
-  // delete[] I;
+  delete[] I;
   checkCudaErrors(cudaFreeHost(z));
-  checkCudaErrors(cudaFreeHost(I));
   checkCudaErrors(cudaFree(dev_z));
   checkCudaErrors(cudaFree(dev_w));
-  checkCudaErrors(cudaFree(dev_y));
-  checkCudaErrors(cudaFree(dev_C));
 
-  checkCudaErrors(cudaFree(dev_I));
-  checkCudaErrors(cudaFree(dev_indices));
-  // checkCudaErrors(cudaFree(dev_I));
 
   checkCudaErrors(cudaFree(dev_csrValA));
   checkCudaErrors(cudaFree(dev_csrRowIndA));
   checkCudaErrors(cudaFree(dev_csrColIndA));
 
-  // CHECK_CUSPARSE( cusparseDestroySpMat(*matA) )
-  // CHECK_CUSPARSE( cusparseDestroyDnVec(*vecX) )
-  // CHECK_CUSPARSE( cusparseDestroyDnVec(*vecY) )
   cusparseDestroySpMat(*matA);
   cusparseDestroyDnVec(*vecX);
   cusparseDestroyDnVec(*vecY);
@@ -548,37 +505,22 @@ double l2r_l2_svc_fun::fun(double *w)
 	int nb = prob->n;
 	double init = 0.0;
 
-	// Xv(w, z);
-
-	thrust::plus<double> binary_op;
-	thrust::multiplies<double> binary_op2;
-	info("nnz=%d\n", nnz);
-
 	// Get device ready for sparse matrix-vector multiply
 	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
 				     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
 				     CUSPARSE_CSRMV_ALG1, NULL) )
+	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
-	// z = y.*z
-	thrust::transform(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
-	// for z > 0, f += z.*z.*C
-	f += thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_C, init,  binary_op, fun_multiply_op());
-
-	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
 	checkCudaErrors(cudaStreamSynchronize(*stream));
 
-	// for(i=0;i<w_size;i++)
-	// 	f += w[i]*w[i];
-	// f /= 2.0;
-
-	// for(i=0;i<l;i++)
-	// {
-	// 	z[i] = y[i]*z[i];
-	// 	double d = 1-z[i];
-	// 	if (d > 0)
-	// 		f += C[i]*d*d;
-	// }
+	for(i=0;i<l;i++)
+	{
+		z[i] = y[i]*z[i];
+		double d = 1-z[i];
+		if (d > 0)
+			f += C[i]*d*d;
+	}
 
 	return(f);
 }
