@@ -320,6 +320,11 @@ protected:
   int *I;
   int sizeI;
   const problem *prob;
+  // Host side storage
+  int nnz;
+  double* csrValA;
+  int* csrRowIndA;
+  int* csrColIndA;
   // Cuda variables
   double* dev_w;
   double* dev_z;
@@ -340,7 +345,7 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   this->C = C;
   int l=prob->l;
   int n=prob->n;
-  int nnz = prob->nnZ;
+  nnz = prob->nnZ;
 
   // time how long initializig the device is taking
   time_t startSVMTime;
@@ -374,9 +379,12 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, nnz * sizeof(int)));
   checkCudaErrors(cudaMalloc((void** )&dev_csrColIndA, nnz * sizeof(int)));
 
-  double* csrValA = new double[nnz];
-  int* csrRowIndA = new int[l+1];
-  int* csrColIndA = new int[nnz];
+  csrValA = new double[nnz];
+  csrRowIndA = new int[l+1];
+  csrColIndA = new int[nnz];
+  // double* csrValA = new double[nnz];
+  // int* csrRowIndA = new int[l+1];
+  // int* csrColIndA = new int[nnz];
   int ind = 0;
   info("nnz=%d, ind=%d, n=%d, l=%d\n", nnz, ind, n, l);
   csrRowIndA[0] = 0;
@@ -435,14 +443,17 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   info("Device initialization took = %f cpu seconds, %f seconds wall clock time.\n", 
        ((double)(procSVMStartClock - startSVMClock)) / (double)CLOCKS_PER_SEC, diffSVM);
   
-  delete [] csrValA;
-  delete [] csrRowIndA;
-  delete [] csrColIndA;
+  // delete [] csrValA;
+  // delete [] csrRowIndA;
+  // delete [] csrColIndA;
 }
 
 l2r_l2_svc_fun::~l2r_l2_svc_fun()
 {
   delete[] I;
+  delete [] csrValA;
+  delete [] csrRowIndA;
+  delete [] csrColIndA;
   checkCudaErrors(cudaFreeHost(z));
   checkCudaErrors(cudaFree(dev_z));
   checkCudaErrors(cudaFree(dev_w));
@@ -518,15 +529,20 @@ double l2r_l2_svc_fun::fun(double *w)
 	// Get device ready for sparse matrix-vector multiply
 	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 
+	sizeI = 0;
 	// Sync matrix multiply now
 	checkCudaErrors(cudaStreamSynchronize(*stream));
-
+	
 	for(i=0;i<l;i++)
 	{
 		z[i] = y[i]*z[i];
 		double d = 1-z[i];
-		if (d > 0)
+		if (d > 0){
 			f += C[i]*d*d;
+			z[sizeI] = C[i]*y[i]*(z[i]-1);
+			I[sizeI] = i;
+			sizeI++;
+		}
 	}
 
 	return(f);
@@ -563,14 +579,14 @@ void l2r_l2_svc_fun::grad(double *w, double *g)
 	int l=prob->l;
 	int w_size=get_nr_variable();
 
-	sizeI = 0;
-	for (i=0;i<l;i++)
-		if (z[i] < 1)
-		{
-			z[sizeI] = C[i]*y[i]*(z[i]-1);
-			I[sizeI] = i;
-			sizeI++;
-		}
+	// sizeI = 0;
+	// for (i=0;i<l;i++)
+	// 	if (z[i] < 1)
+	// 	{
+	// 		z[sizeI] = C[i]*y[i]*(z[i]-1);
+	// 		I[sizeI] = i;
+	// 		sizeI++;
+	// 	}
 	subXTv(z, g);
 
 	for(i=0;i<w_size;i++)
