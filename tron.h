@@ -33,6 +33,9 @@ public:
 	virtual void fun_Xv(double *w) = 0 ;
 	virtual double fun(double *w) = 0 ;
 	virtual void grad(double *w, double *g) = 0 ;
+	virtual double fun0(double *w) = 0 ;
+	virtual void grad0(double *w, double *g) = 0 ;
+	virtual void sync_grad(double *w, double *g) = 0 ;
 	virtual void Hv(double *s, double *Hs) = 0 ;
 
 	virtual int get_nr_variable(void) = 0 ;

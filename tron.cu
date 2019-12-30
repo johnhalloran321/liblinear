@@ -92,17 +92,16 @@ void TRON::tron(double *w)
 	double *w0 = new double[n];
 	for (i=0; i<n; i++)
 		w0[i] = 0;
-	fun_obj->sync_streamsBC();
-	fun_obj->fun_Xv(w0);
-	fun_obj->fun(w0);
-	fun_obj->grad(w0, g);
+	fun_obj->fun0(w0);
+	fun_obj->grad0(w0, g);
 	double gnorm0 = dnrm2_(&n, g, &inc);
 	delete [] w0;
 
-	fun_obj->sync_streamsBC();
-	fun_obj->fun_Xv(w);
-	f = fun_obj->fun(w);
-	fun_obj->grad(w, g);
+	fun_obj->sync_streamsBC(); // Sync device streams
+	fun_obj->fun_Xv(w); // Start Xv compute
+	f = fun_obj->fun(w); // Sync Xv compute, start sub-matrix transfers
+	fun_obj->grad(w, g); // Sync sub-matrix transfers, calculate gradient
+	fun_obj->stream_hv(); // Copy back original matrix contents
 	double gnorm = dnrm2_(&n, g, &inc);
 
 	if (gnorm <= eps*gnorm0)
@@ -111,6 +110,8 @@ void TRON::tron(double *w)
 	fun_obj->get_diag_preconditioner(M);
 	for(i=0; i<n; i++)
 		M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
+
+	fun_obj->sync_grad(w, g);
 	delta = sqrt(uTMv(n, g, M, g));
 
 	double *w_new = new double[n];
@@ -174,10 +175,14 @@ void TRON::tron(double *w)
 			for(i=0; i<n; i++)
 				M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
 
+			fun_obj->sync_grad(w, g);
 			gnorm = dnrm2_(&n, g, &inc);
 			if (gnorm <= eps*gnorm0)
 				break;
 		}
+
+		fun_obj->stream_hv();
+
 		if (f < -1.0e+32)
 		{
 			info("WARNING: f < -1.0e+32\n");
@@ -227,7 +232,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	int cg_iter = 0;
 	int max_cg_iter = max(n, 5);
 
-	fun_obj->sync_streamsBC();
+	// fun_obj->sync_streamsBC();
 	while (cg_iter < max_cg_iter)
 	{
 		if (sqrt(zTr) <= cgtol)
@@ -271,8 +276,6 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		daxpy_(&n, &one, z, &inc, d, &inc); // Here, change of d
 		zTr = znewTrnew;
 	}
-
-	fun_obj->stream_hv();
 
 	if (cg_iter == max_cg_iter)
 		info("WARNING: reaching maximal number of CG steps\n");
