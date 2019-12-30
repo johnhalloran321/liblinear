@@ -96,20 +96,26 @@ void TRON::tron(double *w)
 	fun_obj->grad0(w0, g);
 	double gnorm0 = dnrm2_(&n, g, &inc);
 	delete [] w0;
-
+	
 	fun_obj->sync_streamsBC(); // Sync device streams
 	fun_obj->fun_Xv(w); // Start Xv compute
 	f = fun_obj->fun(w); // Sync Xv compute, start sub-matrix transfers
+	/////////////// Interleave independent host operations
+	fun_obj->get_diag_preconditioner(M);
+	for(i=0; i<n; i++)
+		M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
+	/////////////// Interleave
 	fun_obj->grad(w, g); // Sync sub-matrix transfers, calculate gradient
 	fun_obj->stream_hv(); // Copy back original matrix contents
+
 	double gnorm = dnrm2_(&n, g, &inc);
 
 	if (gnorm <= eps*gnorm0)
 		search = 0;
 
-	fun_obj->get_diag_preconditioner(M);
-	for(i=0; i<n; i++)
-		M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
+	// fun_obj->get_diag_preconditioner(M);
+	// for(i=0; i<n; i++)
+	// 	M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
 
 	fun_obj->sync_grad(w, g);
 	delta = sqrt(uTMv(n, g, M, g));
@@ -171,16 +177,18 @@ void TRON::tron(double *w)
 			memcpy(w, w_new, sizeof(double)*n);
 			f = fnew;
 			fun_obj->grad(w, g);
+			// Preconditioner is independent of gradient compute, interleave
 			fun_obj->get_diag_preconditioner(M);
 			for(i=0; i<n; i++)
 				M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
 
-			fun_obj->sync_grad(w, g);
+			fun_obj->sync_grad(w, g); // Sync gradient computation
 			gnorm = dnrm2_(&n, g, &inc);
 			if (gnorm <= eps*gnorm0)
 				break;
 		}
-
+		
+		// Copy back original contents of CSR matrix
 		fun_obj->stream_hv();
 
 		if (f < -1.0e+32)
