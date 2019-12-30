@@ -227,6 +227,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	int cg_iter = 0;
 	int max_cg_iter = max(n, 5);
 
+	fun_obj->sync_streamsBC();
 	while (cg_iter < max_cg_iter)
 	{
 		if (sqrt(zTr) <= cgtol)

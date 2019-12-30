@@ -333,14 +333,16 @@ protected:
   double* sub_csrValA;
   int* sub_csrRowIndA;
   int* sub_csrColIndA;
+  double* sub_C;
   // Cuda variables
   double* dev_w;
   double* dev_z;
   double* dev_csrValA;
   int* dev_csrRowIndA;
   int* dev_csrColIndA;
-  cusparseSpMatDescr_t *matA;
-  cusparseDnVecDescr_t *vecX, *vecY;
+  double* dev_C;
+  cusparseSpMatDescr_t *matA, *matB;
+  cusparseDnVecDescr_t *vecX, *vecY, *sub_vecY;
   cusparseHandle_t *handle;
   cudaStream_t *stream;
   cudaStream_t *streamB;
@@ -355,17 +357,21 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   int n=prob->n;
   nnz = prob->nnZ;
 
+  I = new int[l];
+  sub_C = new double[l];
   // time how long initializig the device is taking
   time_t startSVMTime;
   time(&startSVMTime);
   clock_t startSVMClock = clock();
 
-  I = new int[l];
   // // Pin memory
   checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
   // Cuda device side variables
   checkCudaErrors(cudaMalloc((void** )&dev_w, n * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
+  checkCudaErrors(cudaMalloc((void** )&dev_C, l * sizeof(double)));
+
+  // checkCudaErrors(cudaMemcpyAsync(dev_C, C, l * sizeof(double), cudaMemcpyHostToDevice, *stream));
 
   time_t startCsrMatTime;
   time(&startCsrMatTime);
@@ -422,8 +428,10 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
        ((double)(procCsrMatClock - startCsrMatClock)) / (double)CLOCKS_PER_SEC, diffCsr);
 
   matA = new cusparseSpMatDescr_t;
+  matB = new cusparseSpMatDescr_t;
   vecX = new cusparseDnVecDescr_t;
   vecY = new cusparseDnVecDescr_t;
+  sub_vecY = new cusparseDnVecDescr_t;
   stream = new cudaStream_t;
   streamB = new cudaStream_t;
   streamC = new cudaStream_t;
@@ -463,6 +471,7 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
 l2r_l2_svc_fun::~l2r_l2_svc_fun()
 {
   delete[] I;
+  delete[] sub_C;
   delete [] csrValA;
   delete [] csrRowIndA;
   delete [] csrColIndA;
@@ -470,6 +479,7 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   delete [] sub_csrRowIndA;
   delete [] sub_csrColIndA;
   checkCudaErrors(cudaFreeHost(z));
+  checkCudaErrors(cudaFree(dev_C));
   checkCudaErrors(cudaFree(dev_z));
   checkCudaErrors(cudaFree(dev_w));
 
@@ -478,8 +488,10 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   checkCudaErrors(cudaFree(dev_csrColIndA));
 
   cusparseDestroySpMat(*matA);
+  cusparseDestroySpMat(*matB);
   cusparseDestroyDnVec(*vecX);
   cusparseDestroyDnVec(*vecY);
+  cusparseDestroyDnVec(*sub_vecY);
   checkCudaErrors(cudaStreamDestroy(*stream));
   checkCudaErrors(cudaStreamDestroy(*streamB));
   checkCudaErrors(cudaStreamDestroy(*streamC));
@@ -487,8 +499,10 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
 
 
   delete matA;
+  delete matB;
   delete vecX;
   delete vecY;
+  delete sub_vecY;
   delete stream;
   delete streamB;
   delete streamC;
@@ -530,7 +544,7 @@ void l2r_l2_svc_fun::fun_Xv(double *w)
 	// Get device ready for sparse matrix-vector multiply
 	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-				     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
+		     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
 		     CUSPARSE_CSRMV_ALG2, NULL);
 	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 }
@@ -563,6 +577,7 @@ double l2r_l2_svc_fun::fun(double *w)
 			f += C[i]*d*d;
 			z[sizeI] = C[i]*y[i]*(z[i]-1);
 			I[sizeI] = i;
+			sub_C[sizeI] = C[i];
 			// Update submatrix
 			feature_node *x = prob->x[i];
 			while(x->index != -1)
@@ -575,16 +590,25 @@ double l2r_l2_svc_fun::fun(double *w)
 			sub_csrRowIndA[sizeI+1] = ind;
 
 			sizeI++;
-
-
 		}
 	}
 
 	nnz = ind;
 	checkCudaErrors(cudaMemcpyAsync(dev_z, z, sizeI * sizeof(double), cudaMemcpyHostToDevice, *stream));
-	checkCudaErrors(cudaMemcpyAsync(dev_csrValA, sub_csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	// Copy sub-matrix
+	checkCudaErrors(cudaMemcpyAsync(dev_csrValA, sub_csrValA, ind * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, sub_csrRowIndA, (sizeI+1) * sizeof(int), cudaMemcpyHostToDevice, *streamB));
-	checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, sub_csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
+	checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, sub_csrColIndA, ind * sizeof(int), cudaMemcpyHostToDevice, *streamC));
+	// Copy sub-C
+	checkCudaErrors(cudaMemcpyAsync(dev_C, sub_C, sizeI * sizeof(double), cudaMemcpyHostToDevice, *streamC));
+
+	cusparseCreateDnVec(sub_vecY, sizeI, dev_z, CUDA_R_64F);
+	cusparseCreateCsr(matB, sizeI, w_size, ind,
+			  dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
+			  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+			  CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+
+
 	return(f);
 }
 
@@ -665,17 +689,34 @@ void l2r_l2_svc_fun::Hv(double *s, double *Hs)
 	int w_size=get_nr_variable();
 	feature_node **x=prob->x;
 
-	for(i=0;i<w_size;i++)
-		Hs[i]=0;
-	for(i=0;i<sizeI;i++)
-	{
-		feature_node * const xi=x[I[i]];
-		double xTs = sparse_operator::dot(s, xi);
+	double alphaCu = 1.0;
+	double betaCu = 0.0;	
 
-		xTs = C[I[i]]*xTs;
+	thrust::multiplies<double> binary_op;
 
-		sparse_operator::axpy(xTs, xi, Hs);
-	}
+	cudaMemcpyAsync(dev_w, s, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream);
+	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+		     &alphaCu, *matB, *vecX, &betaCu, *sub_vecY, CUDA_R_64F,
+		     CUSPARSE_CSRMV_ALG1, NULL);
+	thrust::transform(thrust::cuda::par.on(*stream), dev_z, dev_z + sizeI, dev_C, dev_z, binary_op);
+	cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
+		     &alphaCu, *matB, *sub_vecY, &betaCu, *vecX, CUDA_R_64F,
+		     CUSPARSE_CSRMV_ALG1, NULL);
+	checkCudaErrors(cudaMemcpyAsync(Hs, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	cudaStreamSynchronize(*stream);
+
+	// for(i=0;i<w_size;i++)
+	// 	Hs[i]=0;
+	// for(i=0;i<sizeI;i++)
+	// {
+	// 	feature_node * const xi=x[I[i]];
+	// 	double xTs = sparse_operator::dot(s, xi);
+
+	// 	xTs = C[I[i]]*xTs;
+
+	// 	sparse_operator::axpy(xTs, xi, Hs);
+	// }
+
 	for(i=0;i<w_size;i++)
 		Hs[i] = s[i] + 2*Hs[i];
 
