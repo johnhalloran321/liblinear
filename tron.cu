@@ -233,8 +233,8 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		if (sqrt(zTr) <= cgtol)
 			break;
 		cg_iter++;
-		fun_obj->Hv(d, Hd);
-
+		fun_obj->Hv(d, Hd); // Hd is currently needed right away
+		
 		alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
 		daxpy_(&n, &alpha, d, &inc, s, &inc);
 
@@ -267,8 +267,8 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 			z[i] = r[i] / M[i];
 		znewTrnew = ddot_(&n, z, &inc, r, &inc);
 		beta = znewTrnew/zTr;
-		dscal_(&n, &beta, d, &inc);
-		daxpy_(&n, &one, z, &inc, d, &inc);
+		dscal_(&n, &beta, d, &inc); // Here, change of d
+		daxpy_(&n, &one, z, &inc, d, &inc); // Here, change of d
 		zTr = znewTrnew;
 	}
 
