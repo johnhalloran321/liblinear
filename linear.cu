@@ -326,7 +326,6 @@ protected:
   double* dev_csrValA;
   int* dev_csrRowIndA;
   int* dev_csrColIndA;
-  int nnz;
   cusparseSpMatDescr_t *matA;
   cusparseDnVecDescr_t *vecX, *vecY;
   cusparseHandle_t *handle;
@@ -341,7 +340,7 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   this->C = C;
   int l=prob->l;
   int n=prob->n;
-  nnz = 0;
+  int nnz = prob->nnZ;
 
   // time how long initializig the device is taking
   time_t startSVMTime;
@@ -359,7 +358,8 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   time(&startCsrMatTime);
   clock_t startCsrMatClock = clock();
 
-  info("nnz=%d, n=%d, l=%d\n", nnz, n, l);
+  info("hi: nnz=%d, n=%d, l=%d\n", prob->nnZ, n, l);
+  nnz = 0;
   // Generate matrix in COO format
   for(int i=0;i<l;i++){
     feature_node *x = prob->x[i];
@@ -434,7 +434,7 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
 
   info("Device initialization took = %f cpu seconds, %f seconds wall clock time.\n", 
        ((double)(procSVMStartClock - startSVMClock)) / (double)CLOCKS_PER_SEC, diffSVM);
-
+  
   delete [] csrValA;
   delete [] csrRowIndA;
   delete [] csrColIndA;
@@ -500,7 +500,7 @@ void l2r_l2_svc_fun::fun_Xv(double *w)
 	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
 				     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
-		     CUSPARSE_CSRMV_ALG1, NULL);
+		     CUSPARSE_CSRMV_ALG2, NULL);
 	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 }
 

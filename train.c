@@ -106,9 +106,9 @@ int main(int argc, char **argv)
 	const char *error_msg;
 
 	parse_command_line(argc, argv, input_file_name, model_file_name);
-	printf("n=%d,l=%d,nnz=%d\n", prob.n, prob.l, prob.nnz);
+	printf("Prior to read: n=%d,l=%d,nnZ=%d\n", prob.n, prob.l, prob.nnZ);
 	read_problem(input_file_name);
-	printf("n=%d,l=%d,nnz=%d\n", prob.n, prob.l, prob.nnz);
+	printf("Read: n=%d,l=%d,nnZ=%d\n", prob.n, prob.l, prob.nnZ);
 	error_msg = check_parameter(&prob,&param);
 
 	if(error_msg)
@@ -141,9 +141,9 @@ int main(int argc, char **argv)
 	free(x_space);
 	free(line);
 	/* // COO */
-	/* free(prob.cooValA); */
-	/* free(prob.cooRowIndA); */
-	/* free(prob.cooColIndA); */
+	/* free(prob.csrValA); */
+	/* free(prob.csrRowIndA); */
+	/* free(prob.csrColIndA); */
 	return 0;
 }
 
@@ -402,13 +402,16 @@ void read_problem(const char *filename)
 	prob.y = Malloc(double,prob.l);
 	prob.x = Malloc(struct feature_node *,prob.l);
 	x_space = Malloc(struct feature_node,elements+prob.l);
-	/* // COO matrix format */
-	/* prob.cooValA = Malloc(double,elements+prob.l); */
-	/* prob.cooRowIndA = Malloc(int,elements+prob.l); */
-	/* prob.cooColIndA = Malloc(int,elements+prob.l); */
-	prob.nnz = elements;
-	if(prob.bias >= 0)
-	  prob.nnz += prob.l;
+	prob.nnZ = elements;
+	if(prob.bias < 0)
+	  prob.nnZ -= prob.l;
+
+	/* /\* // COO matrix format *\/ */
+	/* prob.csrValA = Malloc(double,prob.nnZ); */
+	/* prob.csrRowIndA = Malloc(int,prob.nnZ); */
+	/* prob.csrColIndA = Malloc(int,prob.nnZ); */
+
+	printf("0: nnZ=%d\n", prob.nnZ);
 
 	max_index = 0;
 	j=0;
@@ -488,4 +491,18 @@ void read_problem(const char *filename)
 		prob.n=max_index;
 
 	fclose(fp);
+
+	/* int ind = 0; */
+	/* prob.csrRowIndA[0] = 0; */
+	/* for(i=0;i<prob.l;i++){ */
+	/*   while(x_space[ind].index!=-1) */
+	/*     { */
+	/*       prob.csrValA[ind] = x_space[ind].value; */
+	/*       prob.csrColIndA[ind] = x_space[ind].index-1; */
+	/*       ind++; */
+	/*     } */
+	/*   prob.csrRowIndA[i+1] = ind; */
+	/* } */
+
+
 }

@@ -22,7 +22,10 @@ struct problem
   struct feature_node **x;
   double bias;            /* < 0 if no bias term */
   // represent sparse matrix in COO format
-  int nnz;
+  int nnZ;
+  /* double* csrValA; */
+  /* int* csrRowIndA; */
+  /* int* csrColIndA; */
   /* double* cooValA; */
   /* int* cooRowIndA; */
   /* int* cooColIndA; */
