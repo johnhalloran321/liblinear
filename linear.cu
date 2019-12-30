@@ -140,6 +140,7 @@ public:
 	~l2r_lr_fun();
 
         void sync_streamsBC();
+        void stream_hv();
         void fun_Xv(double *w);
 	double fun(double *w);
 	void grad(double *w, double *g);
@@ -176,6 +177,9 @@ l2r_lr_fun::~l2r_lr_fun()
 }
 
 void l2r_lr_fun::sync_streamsBC(){
+}
+
+void l2r_lr_fun::stream_hv(){
 }
 
 void l2r_lr_fun::fun_Xv(double *w){
@@ -303,6 +307,7 @@ public:
   ~l2r_l2_svc_fun();
 
   void sync_streamsBC();
+  void stream_hv();
   void fun_Xv(double *w);
   double fun(double *w);
   void grad(double *w, double *g);
@@ -325,6 +330,9 @@ protected:
   double* csrValA;
   int* csrRowIndA;
   int* csrColIndA;
+  double* sub_csrValA;
+  int* sub_csrRowIndA;
+  int* sub_csrColIndA;
   // Cuda variables
   double* dev_w;
   double* dev_z;
@@ -382,6 +390,10 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   csrValA = new double[nnz];
   csrRowIndA = new int[l+1];
   csrColIndA = new int[nnz];
+
+  sub_csrValA = new double[nnz];
+  sub_csrRowIndA = new int[l+1];
+  sub_csrColIndA = new int[nnz];
   // double* csrValA = new double[nnz];
   // int* csrRowIndA = new int[l+1];
   // int* csrColIndA = new int[nnz];
@@ -454,10 +466,12 @@ l2r_l2_svc_fun::~l2r_l2_svc_fun()
   delete [] csrValA;
   delete [] csrRowIndA;
   delete [] csrColIndA;
+  delete [] sub_csrValA;
+  delete [] sub_csrRowIndA;
+  delete [] sub_csrColIndA;
   checkCudaErrors(cudaFreeHost(z));
   checkCudaErrors(cudaFree(dev_z));
   checkCudaErrors(cudaFree(dev_w));
-
 
   checkCudaErrors(cudaFree(dev_csrValA));
   checkCudaErrors(cudaFree(dev_csrRowIndA));
@@ -501,6 +515,12 @@ void l2r_l2_svc_fun::sync_streamsBC(){
   checkCudaErrors(cudaStreamSynchronize(*streamC));
 }
 
+void l2r_l2_svc_fun::stream_hv(){
+  checkCudaErrors(cudaMemcpyAsync(dev_csrValA, csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
+  checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, csrRowIndA, (sizeI+1) * sizeof(int), cudaMemcpyHostToDevice, *streamB));
+  checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
+}
+
 void l2r_l2_svc_fun::fun_Xv(double *w)
 {
 	int w_size=get_nr_variable();
@@ -532,7 +552,9 @@ double l2r_l2_svc_fun::fun(double *w)
 	sizeI = 0;
 	// Sync matrix multiply now
 	checkCudaErrors(cudaStreamSynchronize(*stream));
-	
+
+	sub_csrRowIndA[0] = 0;	
+	int ind = 0;
 	for(i=0;i<l;i++)
 	{
 		z[i] = y[i]*z[i];
@@ -541,10 +563,28 @@ double l2r_l2_svc_fun::fun(double *w)
 			f += C[i]*d*d;
 			z[sizeI] = C[i]*y[i]*(z[i]-1);
 			I[sizeI] = i;
+			// Update submatrix
+			feature_node *x = prob->x[i];
+			while(x->index != -1)
+			  {
+			    sub_csrValA[ind] = x->value;
+			    sub_csrColIndA[ind] = x->index-1;
+			    x++;
+			    ind++;
+			  }
+			sub_csrRowIndA[sizeI+1] = ind;
+
 			sizeI++;
+
+
 		}
 	}
 
+	nnz = ind;
+	checkCudaErrors(cudaMemcpyAsync(dev_z, z, sizeI * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_csrValA, sub_csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, sub_csrRowIndA, (sizeI+1) * sizeof(int), cudaMemcpyHostToDevice, *streamB));
+	checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, sub_csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
 	return(f);
 }
 
@@ -638,6 +678,11 @@ void l2r_l2_svc_fun::Hv(double *s, double *Hs)
 	}
 	for(i=0;i<w_size;i++)
 		Hs[i] = s[i] + 2*Hs[i];
+
+	// checkCudaErrors(cudaStreamSynchronize(*stream));
+	// checkCudaErrors(cudaStreamSynchronize(*streamB));
+	// checkCudaErrors(cudaStreamSynchronize(*streamC));
+
 }
 
 void l2r_l2_svc_fun::Xv(double *v, double *Xv)

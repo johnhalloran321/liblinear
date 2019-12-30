@@ -29,6 +29,7 @@ class function
 {
 public:
 	virtual void sync_streamsBC() = 0 ;
+	virtual void stream_hv() = 0 ;
 	virtual void fun_Xv(double *w) = 0 ;
 	virtual double fun(double *w) = 0 ;
 	virtual void grad(double *w, double *g) = 0 ;

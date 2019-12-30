@@ -99,6 +99,7 @@ void TRON::tron(double *w)
 	double gnorm0 = dnrm2_(&n, g, &inc);
 	delete [] w0;
 
+	fun_obj->sync_streamsBC();
 	fun_obj->fun_Xv(w);
 	f = fun_obj->fun(w);
 	fun_obj->grad(w, g);
@@ -122,6 +123,7 @@ void TRON::tron(double *w)
 		memcpy(w_new, w, sizeof(double)*n);
 		daxpy_(&n, &one, s, &inc, w_new, &inc);
 
+		fun_obj->sync_streamsBC();
 	        fun_obj->fun_Xv(w_new);
 		gs = ddot_(&n, g, &inc, s, &inc);
 		prered = -0.5*(gs-ddot_(&n, s, &inc, r, &inc));
@@ -269,12 +271,16 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		zTr = znewTrnew;
 	}
 
+	fun_obj->stream_hv();
+
 	if (cg_iter == max_cg_iter)
 		info("WARNING: reaching maximal number of CG steps\n");
 	
 	delete[] d;
 	delete[] Hd;
 	delete[] z;
+
+
 
 	return(cg_iter);
 }
