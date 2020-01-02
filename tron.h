@@ -28,7 +28,9 @@ typedef thrust::device_vector<int>::iterator IndexIterator;
 class function
 {
 public:
-	virtual double fun(double *w) = 0 ;
+	virtual void sync_csrStreams() = 0 ;
+	virtual void sync_deStreams() = 0 ;
+	virtual double fun(double* w) = 0 ;
 	virtual void grad(double *w, double *g) = 0 ;
 	virtual void Hv(double *s, double *Hs) = 0 ;
 

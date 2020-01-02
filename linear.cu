@@ -139,6 +139,8 @@ public:
 	l2r_lr_fun(const problem *prob, double *C);
 	~l2r_lr_fun();
 
+	void sync_csrStreams();
+	void sync_deStreams();
 	double fun(double *w);
 	void grad(double *w, double *g);
 	void Hv(double *s, double *Hs);
@@ -154,25 +156,190 @@ private:
 	double *z;
 	double *D;
 	const problem *prob;
+        //////// Cuda variables
+  double* dev_w;
+  double* dev_y;
+  double* dev_z;
+  double* dev_C;
+  double* dev_acc;
+  double* dev_csrValA;
+  int* dev_csrRowIndA;
+  int* dev_csrColIndA;
+  int nnz;
+  cusparseSpMatDescr_t *matA;
+  cusparseDnVecDescr_t *vecX, *vecY;
+  cusparseHandle_t *handle;
+  cudaStream_t *stream, *streamB, *streamC, *streamD, *streamE;
 };
 
 l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 {
 	int l=prob->l;
-
+	int n=prob->n;
+	nnz = 0;
 	this->prob = prob;
 
-	z = new double[l];
+	// z = new double[l];
 	D = new double[l];
 	this->C = C;
+
+	// time how long initializig the device is taking
+	time_t startSVMTime;
+	time(&startSVMTime);
+	clock_t startSVMClock = clock();
+
+	/////////// Cuda variables
+	// // Pin memory
+	checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
+	// Cuda device side variables
+	checkCudaErrors(cudaMalloc((void** )&dev_w, n * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_y, l * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_C, l * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
+	// device-side storage to be accumulated using reduction
+	checkCudaErrors(cudaMalloc((void** )&dev_acc, n * sizeof(double))); 
+
+	matA = new cusparseSpMatDescr_t;
+	vecX = new cusparseDnVecDescr_t;
+	vecY = new cusparseDnVecDescr_t;
+	stream = new cudaStream_t;
+	streamB = new cudaStream_t;
+	streamC = new cudaStream_t;
+	streamD = new cudaStream_t;
+	streamE = new cudaStream_t;
+	handle = new cusparseHandle_t;
+
+	cusparseCreateDnVec(vecX, n, dev_w, CUDA_R_64F);
+	cusparseCreateDnVec(vecY, l, dev_z, CUDA_R_64F);
+
+	checkCudaErrors(cudaStreamCreateWithFlags(stream, cudaStreamNonBlocking));
+	checkCudaErrors(cudaStreamCreateWithFlags(streamB, cudaStreamNonBlocking));
+	checkCudaErrors(cudaStreamCreateWithFlags(streamC, cudaStreamNonBlocking));
+	checkCudaErrors(cudaStreamCreateWithFlags(streamD, cudaStreamNonBlocking));
+	checkCudaErrors(cudaStreamCreateWithFlags(streamE, cudaStreamNonBlocking));
+	cusparseCreate(handle);
+	cusparseSetStream(*handle, *stream);
+
+	checkCudaErrors(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, *streamD));
+	checkCudaErrors(cudaMemcpyAsync(dev_C, C, l * sizeof(double), cudaMemcpyHostToDevice, *streamE));
+
+	time_t startCsrMatTime;
+	time(&startCsrMatTime);
+	clock_t startCsrMatClock = clock();
+
+	info("nnz=%d, n=%d, l=%d\n", nnz, n, l);
+	// Generate matrix in COO format
+	for(int i=0;i<l;i++){
+	  feature_node *x = prob->x[i];
+	  while(x->index != -1)
+	    {
+	      x++;
+	      nnz++;
+	    }
+	}
+
+	// Create Matrix and allocate device-side matrix storage
+	checkCudaErrors(cudaMalloc((void** )&dev_csrValA, nnz * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, nnz * sizeof(int)));
+	checkCudaErrors(cudaMalloc((void** )&dev_csrColIndA, nnz * sizeof(int)));
+	// 
+
+	double* csrValA = new double[nnz];
+	int* csrRowIndA = new int[l+1];
+	int* csrColIndA = new int[nnz];
+	int ind = 0;
+	info("nnz=%d, ind=%d, n=%d, l=%d\n", nnz, ind, n, l);
+	csrRowIndA[0] = 0;
+	for(int i=0;i<l;i++){
+	  feature_node *x = prob->x[i];
+	  while(x->index != -1)
+	    {
+	      csrValA[ind] = x->value;
+	      csrColIndA[ind] = x->index-1;
+	      x++;
+	      ind++;
+	    }
+	  csrRowIndA[i+1] = ind;
+	}
+	info("nnz=%d, ind=%d\n", nnz, ind);
+
+	time_t procCsrMatTime;
+	time(&procCsrMatTime);
+	clock_t procCsrMatClock = clock();
+	double diffCsr = difftime(procCsrMatTime,startCsrMatTime);
+
+	info("Constructing the CSR matrix took = %f cpu seconds, %f seconds wall clock time.\n", 
+	     ((double)(procCsrMatClock - startCsrMatClock)) / (double)CLOCKS_PER_SEC, diffCsr);
+
+
+	checkCudaErrors(cudaMemcpyAsync(dev_csrValA, csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, csrRowIndA, (l+1) * sizeof(int), cudaMemcpyHostToDevice, *streamB));
+	checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
+
+	cusparseCreateCsr(matA, l, n, nnz,
+			  dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
+			  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+			  CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+
+	time_t procSVMStart;
+	clock_t procSVMStartClock = clock();
+	time(&procSVMStart);
+	double diffSVM = difftime(procSVMStart,startSVMTime);
+
+	info("Device initialization took = %f cpu seconds, %f seconds wall clock time.\n", 
+	     ((double)(procSVMStartClock - startSVMClock)) / (double)CLOCKS_PER_SEC, diffSVM);
+
+	delete [] csrValA;
+	delete [] csrRowIndA;
+	delete [] csrColIndA;
 }
 
 l2r_lr_fun::~l2r_lr_fun()
 {
-	delete[] z;
+	// delete[] z;
 	delete[] D;
+
+	checkCudaErrors(cudaFreeHost(z));
+	checkCudaErrors(cudaFree(dev_z));
+	checkCudaErrors(cudaFree(dev_w));
+	checkCudaErrors(cudaFree(dev_y));
+	checkCudaErrors(cudaFree(dev_C));
+	checkCudaErrors(cudaFree(dev_acc));
+	checkCudaErrors(cudaFree(dev_csrValA));
+	checkCudaErrors(cudaFree(dev_csrRowIndA));
+	checkCudaErrors(cudaFree(dev_csrColIndA));
+
+	cusparseDestroySpMat(*matA);
+	cusparseDestroyDnVec(*vecX);
+	cusparseDestroyDnVec(*vecY);
+	checkCudaErrors(cudaStreamDestroy(*stream));
+	checkCudaErrors(cudaStreamDestroy(*streamB));
+	checkCudaErrors(cudaStreamDestroy(*streamC));
+	checkCudaErrors(cudaStreamDestroy(*streamD));
+	checkCudaErrors(cudaStreamDestroy(*streamE));
+	cusparseDestroy(*handle);
+
+	delete matA;
+	delete vecX;
+	delete vecY;
+	delete stream;
+	delete streamB;
+	delete streamC;
+	delete streamD;
+	delete streamE;
+	delete handle;
+
 }
 
+void l2r_lr_fun::sync_csrStreams(){
+  checkCudaErrors(cudaStreamSynchronize(*streamB));
+  checkCudaErrors(cudaStreamSynchronize(*streamC));
+}
+
+void l2r_lr_fun::sync_deStreams(){
+  checkCudaErrors(cudaStreamSynchronize(*streamD));
+  checkCudaErrors(cudaStreamSynchronize(*streamE));
+}
 
 double l2r_lr_fun::fun(double *w)
 {
@@ -181,12 +348,25 @@ double l2r_lr_fun::fun(double *w)
 	double *y=prob->y;
 	int l=prob->l;
 	int w_size=get_nr_variable();
+	double alphaCu = 1.0;
+	double betaCu = 0.0;
+	int inc = 1;
 
-	Xv(w, z);
+	// Xv(w, z);
 
-	for(i=0;i<w_size;i++)
-		f += w[i]*w[i];
-	f /= 2.0;
+	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+				     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
+				     CUSPARSE_CSRMV_ALG1, NULL) )
+	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
+	// // z = y.*z
+	// thrust::transform(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
+	// // for z > 0, f += z.*z.*C
+	// f += thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_C, init,  binary_op, fun_multiply_op());
+
+	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
+
 	for(i=0;i<l;i++)
 	{
 		double yz = y[i]*z[i];
@@ -294,6 +474,9 @@ class l2r_l2_svc_fun: public function
 public:
   l2r_l2_svc_fun(const problem *prob, double *C);
   ~l2r_l2_svc_fun();
+
+  void sync_csrStreams();
+  void sync_deStreams();
 
   double fun(double *w);
   void grad(double *w, double *g);
@@ -534,6 +717,13 @@ struct fun_multiply_op {
     // return a*a*b*(a > 0);
   }
 };
+
+void l2r_l2_svc_fun::sync_csrStreams(){
+}
+
+void l2r_l2_svc_fun::sync_deStreams(){
+}
+
 
 double l2r_l2_svc_fun::fun(double *w)
 {
