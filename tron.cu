@@ -273,12 +273,12 @@ void TRON::tron(double *w)
 		w0[i] = 0;
 	fun_obj->sync_deStreams();
 	fun_obj->sync_csrStreams();
-	fun_obj->fun(w0);
+	fun_obj->fun(w0, g);
 	fun_obj->grad(w0, g);
 	double gnorm0 = dnrm2_(&n, g, &inc);
 	delete [] w0;
 
-	f = fun_obj->fun(w);
+	f = fun_obj->fun(w, g);
 	fun_obj->grad(w, g);
 	double gnorm = dnrm2_(&n, g, &inc);
 
@@ -302,7 +302,7 @@ void TRON::tron(double *w)
 
 		gs = ddot_(&n, g, &inc, s, &inc);
 		prered = -0.5*(gs-ddot_(&n, s, &inc, r, &inc));
-		fnew = fun_obj->fun(w_new);
+		fnew = fun_obj->fun(w_new, g);
 
 		// Compute the actual reduction.
 		actred = f - fnew;
