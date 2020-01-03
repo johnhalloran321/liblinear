@@ -194,7 +194,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	/////////// Cuda variables
 	// // Pin memory
 	checkCudaErrors(cudaMallocHost((void** )&D, l * sizeof(double)));
-	// checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
+	checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
 	// Cuda device side variables
 	checkCudaErrors(cudaMalloc((void** )&dev_w, n * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_y, l * sizeof(double)));
@@ -202,7 +202,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_D, l * sizeof(double)));
 	// device-side storage to be accumulated using reduction
-	checkCudaErrors(cudaMalloc((void** )&dev_acc, n * sizeof(double))); 
+	checkCudaErrors(cudaMalloc((void** )&dev_acc, l * sizeof(double))); 
 
 	matA = new cusparseSpMatDescr_t;
 	vecX = new cusparseDnVecDescr_t;
@@ -245,7 +245,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 
 	// Create Matrix and allocate device-side matrix storage
 	checkCudaErrors(cudaMalloc((void** )&dev_csrValA, nnz * sizeof(double)));
-	checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, nnz * sizeof(int)));
+	checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, (l+1) * sizeof(int)));
 	checkCudaErrors(cudaMalloc((void** )&dev_csrColIndA, nnz * sizeof(int)));
 	// 
 
@@ -304,7 +304,7 @@ l2r_lr_fun::~l2r_lr_fun()
 	// delete[] z;
 	// delete[] D;
 
-	// checkCudaErrors(cudaFreeHost(z));
+	checkCudaErrors(cudaFreeHost(z));
 	checkCudaErrors(cudaFreeHost(D));
 	checkCudaErrors(cudaFree(dev_z));
 	checkCudaErrors(cudaFree(dev_D));
@@ -353,6 +353,7 @@ __global__ void ready_accumulator(double* z, double* C, double* D, double* y, do
   // use grid-stride loop
   CUDA_KERNEL_LOOP(i, l) {
     double yz = y[i]*z[i];
+    // z[i] = yz;
     z[i] = 1/(1 + exp(-yz));
     D[i] = z[i]*(1-z[i]);
     z[i] = C[i]*(z[i]-1)*y[i];
@@ -366,9 +367,9 @@ __global__ void ready_accumulator(double* z, double* C, double* D, double* y, do
 
 void l2r_lr_fun::transfer_w(double *w)
 {
-	// int w_size=get_nr_variable();
+	int w_size=get_nr_variable();
 
-	// checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
 }
 
 double l2r_lr_fun::fun(double *w, double *g)
@@ -384,7 +385,7 @@ double l2r_lr_fun::fun(double *w, double *g)
 
 	// Xv(w, z);
 
-	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	// checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
 				     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
 				     CUSPARSE_CSRMV_ALG1, NULL) )
@@ -428,7 +429,6 @@ void l2r_lr_fun::grad(double *w, double *g)
 	double alphaCu = 1.0;
 	double betaCu = 0.0;
 
-
 	// checkCudaErrors(cudaStreamSynchronize(*streamB));
 	// checkCudaErrors(cudaStreamSynchronize(*streamC));
 	// for(i=0;i<l;i++)
@@ -444,16 +444,15 @@ void l2r_lr_fun::grad(double *w, double *g)
 	// 			     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
 	// 			     CUSPARSE_CSRMV_ALG1, NULL) )
 	// checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-	// CHECK_CUSPARSE( 
+
 	cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-				     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
+		     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
 		     CUSPARSE_CSRMV_ALG1, NULL);
-	  // )
 	checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 
-	checkCudaErrors(cudaStreamSynchronize(*stream));
-	for(i=0;i<w_size;i++)
-		g[i] = w[i] + g[i];
+	// checkCudaErrors(cudaStreamSynchronize(*stream));
+	// for(i=0;i<w_size;i++)
+	// 	g[i] = w[i] + g[i];
 }
 
 void l2r_lr_fun::grad_sync(double *w, double *g)
