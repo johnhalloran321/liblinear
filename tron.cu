@@ -271,15 +271,23 @@ void TRON::tron(double *w)
 	double *w0 = new double[n];
 	for (i=0; i<n; i++)
 		w0[i] = 0;
+	fun_obj->transfer_w(w0);
 	fun_obj->sync_deStreams();
 	fun_obj->sync_csrStreams();
 	fun_obj->fun(w0, g);
 	fun_obj->grad(w0, g);
+	// Sync gradient stream
+	fun_obj->grad_sync(w0, g);
+
+	// Start next transfer w
+	fun_obj->transfer_w(w);
+
 	double gnorm0 = dnrm2_(&n, g, &inc);
 	delete [] w0;
 
 	f = fun_obj->fun(w, g);
 	fun_obj->grad(w, g);
+	fun_obj->grad_sync(w, g);
 	double gnorm = dnrm2_(&n, g, &inc);
 
 	if (gnorm <= eps*gnorm0)
@@ -299,6 +307,9 @@ void TRON::tron(double *w)
 
 		memcpy(w_new, w, sizeof(double)*n);
 		daxpy_(&n, &one, s, &inc, w_new, &inc);
+
+		// Start next transfer w
+		fun_obj->transfer_w(w_new);
 
 		gs = ddot_(&n, g, &inc, s, &inc);
 		prered = -0.5*(gs-ddot_(&n, s, &inc, r, &inc));
@@ -347,7 +358,8 @@ void TRON::tron(double *w)
 			fun_obj->get_diag_preconditioner(M);
 			for(i=0; i<n; i++)
 				M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
-
+			
+			fun_obj->grad_sync(w, g);
 			gnorm = dnrm2_(&n, g, &inc);
 			if (gnorm <= eps*gnorm0)
 				break;
@@ -400,6 +412,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	cgtol = eps_cg*sqrt(zTr);
 	int cg_iter = 0;
 	int max_cg_iter = max(n, 5);
+	double dsq = delta*delta;
 
 	while (cg_iter < max_cg_iter)
 	{
@@ -422,7 +435,6 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 			double sTMd = uTMv(n, s, M, d);
 			double sTMs = uTMv(n, s, M, s);
 			double dTMd = uTMv(n, d, M, d);
-			double dsq = delta*delta;
 			double rad = sqrt(sTMd*sTMd + dTMd*(dsq-sTMs));
 			if (sTMd >= 0)
 				alpha = (dsq - sTMs)/(sTMd + rad);

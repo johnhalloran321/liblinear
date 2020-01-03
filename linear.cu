@@ -141,8 +141,10 @@ public:
 
 	void sync_csrStreams();
 	void sync_deStreams();
+        void transfer_w(double *w);
         double fun(double *w, double *g);
 	void grad(double *w, double *g);
+	void grad_sync(double *w, double *g);
 	void Hv(double *s, double *Hs);
 
 	int get_nr_variable(void);
@@ -362,6 +364,13 @@ __global__ void ready_accumulator(double* z, double* C, double* D, double* y, do
   }
 }
 
+void l2r_lr_fun::transfer_w(double *w)
+{
+	// int w_size=get_nr_variable();
+
+	// checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
+}
+
 double l2r_lr_fun::fun(double *w, double *g)
 {
 	int i;
@@ -390,11 +399,6 @@ double l2r_lr_fun::fun(double *w, double *g)
 	// checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
 	checkCudaErrors(cudaMemcpyAsync(D, dev_D, l * sizeof(double), cudaMemcpyDeviceToHost, *streamC));
 
-	CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-				     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
-				     CUSPARSE_CSRMV_ALG1, NULL) )
-	checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-
 	// for(i=0;i<l;i++)
 	// {
 	// 	double yz = y[i]*z[i];
@@ -421,6 +425,9 @@ void l2r_lr_fun::grad(double *w, double *g)
 	double *y=prob->y;
 	int l=prob->l;
 	int w_size=get_nr_variable();
+	double alphaCu = 1.0;
+	double betaCu = 0.0;
+
 
 	// checkCudaErrors(cudaStreamSynchronize(*streamB));
 	// checkCudaErrors(cudaStreamSynchronize(*streamC));
@@ -437,6 +444,22 @@ void l2r_lr_fun::grad(double *w, double *g)
 	// 			     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
 	// 			     CUSPARSE_CSRMV_ALG1, NULL) )
 	// checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	// CHECK_CUSPARSE( 
+	cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
+				     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
+		     CUSPARSE_CSRMV_ALG1, NULL);
+	  // )
+	checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+
+	checkCudaErrors(cudaStreamSynchronize(*stream));
+	for(i=0;i<w_size;i++)
+		g[i] = w[i] + g[i];
+}
+
+void l2r_lr_fun::grad_sync(double *w, double *g)
+{
+	int i;
+	int w_size=get_nr_variable();
 
 	checkCudaErrors(cudaStreamSynchronize(*stream));
 	for(i=0;i<w_size;i++)
@@ -478,36 +501,37 @@ void l2r_lr_fun::Hv(double *s, double *Hs)
 	int l=prob->l;
 	int w_size=get_nr_variable();
 	feature_node **x=prob->x;
-	double alphaCu = 1.0;
-	double betaCu = 0.0;
+// 	double alphaCu = 1.0;
+// 	double betaCu = 0.0;
 
-	checkCudaErrors(cudaMemcpyAsync(dev_w, s, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
-	// CHECK_CUSPARSE( 
-	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-		     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
-		     CUSPARSE_CSRMV_ALG1, NULL); 
-			// )
+// 	checkCudaErrors(cudaMemcpyAsync(dev_w, s, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
+// 	// CHECK_CUSPARSE( 
+// 	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+// 		     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
+// 		     CUSPARSE_CSRMV_ALG1, NULL); 
+// 			// )
 
-       transform_xts<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-	  (dev_z, dev_C, dev_D, l);
-	// CHECK_CUSPARSE( 
-       cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-		    &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
-		    CUSPARSE_CSRMV_ALG1, NULL);
-// )
-	checkCudaErrors(cudaMemcpyAsync(Hs, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-	checkCudaErrors(cudaStreamSynchronize(*stream));
-	// for(i=0;i<w_size;i++)
-	// 	Hs[i] = 0;
-	// for(i=0;i<l;i++)
-	// {
-	// 	feature_node * const xi=x[i];
-	// 	double xTs = sparse_operator::dot(s, xi);
+//        transform_xts<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+// 	  (dev_z, dev_C, dev_D, l);
+// 	// CHECK_CUSPARSE( 
+//        cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
+// 		    &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
+// 		    CUSPARSE_CSRMV_ALG1, NULL);
+// // )
+// 	checkCudaErrors(cudaMemcpyAsync(Hs, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 	checkCudaErrors(cudaStreamSynchronize(*stream));
 
-	// 	xTs = C[i]*D[i]*xTs;
+	for(i=0;i<w_size;i++)
+		Hs[i] = 0;
+	for(i=0;i<l;i++)
+	{
+		feature_node * const xi=x[i];
+		double xTs = sparse_operator::dot(s, xi);
 
-	// 	sparse_operator::axpy(xTs, xi, Hs);
-	// }
+		xTs = C[i]*D[i]*xTs;
+
+		sparse_operator::axpy(xTs, xi, Hs);
+	}
 	for(i=0;i<w_size;i++)
 		Hs[i] = s[i] + Hs[i];
 }
@@ -543,9 +567,10 @@ public:
 
   void sync_csrStreams();
   void sync_deStreams();
-
+  void transfer_w(double *w);
   double fun(double *w, double *g);
   void grad(double *w, double *g);
+  void grad_sync(double *w, double *g);
   void Hv(double *s, double *Hs);
 
   int get_nr_variable(void);
@@ -891,6 +916,14 @@ void l2r_l2_svc_fun::grad(double *w, double *g)
 		g[i] = w[i] + 2*g[i];
 }
 
+void l2r_l2_svc_fun::transfer_w(double *w)
+{
+}
+
+void l2r_l2_svc_fun::grad_sync(double *w, double *g)
+{
+}
+
 int l2r_l2_svc_fun::get_nr_variable(void)
 {
 	return prob->n;
@@ -972,8 +1005,10 @@ class l2r_l2_svr_fun: public l2r_l2_svc_fun
 public:
 	l2r_l2_svr_fun(const problem *prob, double *C, double p);
 
+        void transfer_w(double *w);
         double fun(double *w, double* g);
 	void grad(double *w, double *g);
+	void grad_sync(double *w, double *g);
 
 private:
 	double p;
@@ -1045,6 +1080,13 @@ void l2r_l2_svr_fun::grad(double *w, double *g)
 		g[i] = w[i] + 2*g[i];
 }
 
+void l2r_l2_svr_fun::transfer_w(double *w)
+{
+}
+
+void l2r_l2_svr_fun::grad_sync(double *w, double *g)
+{
+}
 // A coordinate descent algorithm for
 // multi-class support vector machines by Crammer and Singer
 //
