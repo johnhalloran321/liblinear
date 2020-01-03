@@ -31,6 +31,7 @@ public:
 	virtual void sync_csrStreams() = 0 ;
 	virtual void sync_deStreams() = 0 ;
 	virtual void transfer_w(double *w) = 0 ;
+	virtual double fun0(double* g) = 0 ;
 	virtual double fun(double* w, double* g) = 0 ;
 	virtual void grad(double *w, double *g) = 0 ;
 	virtual void grad_sync(double *w, double *g) = 0 ;

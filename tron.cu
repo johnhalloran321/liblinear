@@ -271,13 +271,14 @@ void TRON::tron(double *w)
 	double *w0 = new double[n];
 	for (i=0; i<n; i++)
 		w0[i] = 0;
-	fun_obj->transfer_w(w0);
+	// fun_obj->transfer_w(w0);
+	fun_obj->fun0(g);
 	fun_obj->sync_deStreams();
 	fun_obj->sync_csrStreams();
-	fun_obj->fun(w0, g);
-	fun_obj->grad(w0, g);
+	// fun_obj->fun(w0, g);
+	// fun_obj->grad(w0, g);
 	// Sync gradient stream
-	fun_obj->grad_sync(w0, g);
+	// fun_obj->grad_sync(w0, g);
 
 	// Start next transfer w
 	fun_obj->transfer_w(w);

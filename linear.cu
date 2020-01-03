@@ -142,6 +142,7 @@ public:
 	void sync_csrStreams();
 	void sync_deStreams();
         void transfer_w(double *w);
+        double fun0(double* g);
         double fun(double *w, double *g);
 	void grad(double *w, double *g);
 	void grad_sync(double *w, double *g);
@@ -182,7 +183,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	nnz = 0;
 	this->prob = prob;
 
-	// z = new double[l];
+	z = new double[l];
 	// D = new double[l];
 	this->C = C;
 
@@ -301,7 +302,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 
 l2r_lr_fun::~l2r_lr_fun()
 {
-	// delete[] z;
+	delete[] z;
 	// delete[] D;
 
 	// checkCudaErrors(cudaFreeHost(z));
@@ -370,6 +371,28 @@ void l2r_lr_fun::transfer_w(double *w)
 	int w_size=get_nr_variable();
 
 	checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
+}
+
+double l2r_lr_fun::fun0(double* g)
+{
+	int i;
+	double f=0;
+	double ln2 = log(2);
+	double *y=prob->y;
+	int l=prob->l;
+
+	for(i=0;i<l;i++)
+	{
+	  f += C[i]*ln2;
+	  z[i] = 0.5;
+	  D[i] = 0.25;
+	  z[i] = C[i]*(z[i]-1)*y[i];
+
+	}
+
+	XTv(z, g);
+
+	return(f);
 }
 
 double l2r_lr_fun::fun(double *w, double *g)
@@ -567,6 +590,7 @@ public:
   void sync_csrStreams();
   void sync_deStreams();
   void transfer_w(double *w);
+  double fun0(double* g);
   double fun(double *w, double *g);
   void grad(double *w, double *g);
   void grad_sync(double *w, double *g);
@@ -808,6 +832,10 @@ struct fun_multiply_op {
   }
 };
 
+double l2r_l2_svc_fun::fun0(double* g){
+  return 0;
+}
+
 void l2r_l2_svc_fun::sync_csrStreams(){
 }
 
@@ -1005,6 +1033,7 @@ public:
 	l2r_l2_svr_fun(const problem *prob, double *C, double p);
 
         void transfer_w(double *w);
+        double fun0(double* g);
         double fun(double *w, double* g);
 	void grad(double *w, double *g);
 	void grad_sync(double *w, double *g);
@@ -1077,6 +1106,11 @@ void l2r_l2_svr_fun::grad(double *w, double *g)
 
 	for(i=0;i<w_size;i++)
 		g[i] = w[i] + 2*g[i];
+}
+
+double l2r_l2_svr_fun::fun0(double* g)
+{
+  return 0;
 }
 
 void l2r_l2_svr_fun::transfer_w(double *w)
