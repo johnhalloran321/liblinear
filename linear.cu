@@ -161,6 +161,7 @@ private:
   double* dev_y;
   double* dev_z;
   double* dev_C;
+  double* dev_D;
   double* dev_acc;
   double* dev_csrValA;
   int* dev_csrRowIndA;
@@ -180,7 +181,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	this->prob = prob;
 
 	// z = new double[l];
-	D = new double[l];
+	// D = new double[l];
 	this->C = C;
 
 	// time how long initializig the device is taking
@@ -190,12 +191,14 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 
 	/////////// Cuda variables
 	// // Pin memory
+	checkCudaErrors(cudaMallocHost((void** )&D, l * sizeof(double)));
 	checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
 	// Cuda device side variables
 	checkCudaErrors(cudaMalloc((void** )&dev_w, n * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_y, l * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_C, l * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_z, l * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_D, l * sizeof(double)));
 	// device-side storage to be accumulated using reduction
 	checkCudaErrors(cudaMalloc((void** )&dev_acc, n * sizeof(double))); 
 
@@ -297,10 +300,12 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 l2r_lr_fun::~l2r_lr_fun()
 {
 	// delete[] z;
-	delete[] D;
+	// delete[] D;
 
 	checkCudaErrors(cudaFreeHost(z));
+	checkCudaErrors(cudaFreeHost(D));
 	checkCudaErrors(cudaFree(dev_z));
+	checkCudaErrors(cudaFree(dev_D));
 	checkCudaErrors(cudaFree(dev_w));
 	checkCudaErrors(cudaFree(dev_y));
 	checkCudaErrors(cudaFree(dev_C));
@@ -341,12 +346,14 @@ void l2r_lr_fun::sync_deStreams(){
   checkCudaErrors(cudaStreamSynchronize(*streamE));
 }
 
-__global__ void ready_accumulator(double* z, double* C, double* y, double* acc, int l)
+__global__ void ready_accumulator(double* z, double* C, double* D, double* y, double* acc, int l)
 {
   // use grid-stride loop
   CUDA_KERNEL_LOOP(i, l) {
     double yz = y[i]*z[i];
-    z[i] = yz;
+    z[i] = 1/(1 + exp(-yz));
+    D[i] = z[i]*(1-z[i]);
+    z[i] = C[i]*(z[i]-1)*y[i];
     if (yz >= 0) {
       acc[i] = C[i]*log(1 + exp(-yz));
     } else {
@@ -374,13 +381,18 @@ double l2r_lr_fun::fun(double *w)
 				     CUSPARSE_CSRMV_ALG1, NULL) )
 
        ready_accumulator<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-	  (dev_z, dev_C, dev_y, dev_acc, l);
+	  (dev_z, dev_C, dev_D, dev_y, dev_acc, l);
 	f += thrust::reduce(thrust::cuda::par.on(*stream), dev_acc, dev_acc + l, (double) 0,  thrust::plus<double>());
 
 	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 
-	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
+	// checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
+	checkCudaErrors(cudaMemcpyAsync(D, dev_D, l * sizeof(double), cudaMemcpyDeviceToHost, *streamC));
 	checkCudaErrors(cudaStreamSynchronize(*stream));
+	CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
+				     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
+				     CUSPARSE_CSRMV_ALG1, NULL) )
+	// checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
 
 	// for(i=0;i<l;i++)
 	// {
@@ -401,16 +413,22 @@ void l2r_lr_fun::grad(double *w, double *g)
 	int l=prob->l;
 	int w_size=get_nr_variable();
 
-	checkCudaErrors(cudaStreamSynchronize(*streamB));
-	for(i=0;i<l;i++)
-	{
-		// z[i] = 1/(1 + exp(-y[i]*z[i]));
-		z[i] = 1/(1 + exp(-z[i]));
-		D[i] = z[i]*(1-z[i]);
-		z[i] = C[i]*(z[i]-1)*y[i];
-	}
-	XTv(z, g);
+	// checkCudaErrors(cudaStreamSynchronize(*streamB));
+	// checkCudaErrors(cudaStreamSynchronize(*streamC));
+	// for(i=0;i<l;i++)
+	// {
+	// 	// z[i] = 1/(1 + exp(-y[i]*z[i]));
+	// 	// z[i] = 1/(1 + exp(-z[i]));
+	// 	D[i] = z[i]*(1-z[i]);
+	// 	z[i] = C[i]*(z[i]-1)*y[i];
+	// }
+	// XTv(z, g);
 
+	// CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
+	// 			     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
+	// 			     CUSPARSE_CSRMV_ALG1, NULL) )
+	checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
 	for(i=0;i<w_size;i++)
 		g[i] = w[i] + g[i];
 }
@@ -426,6 +444,8 @@ void l2r_lr_fun::get_diag_preconditioner(double *M)
 	int l = prob->l;
 	int w_size=get_nr_variable();
 	feature_node **x = prob->x;
+
+	checkCudaErrors(cudaStreamSynchronize(*streamC));
 
 	for (i=0; i<w_size; i++)
 		M[i] = 1;
