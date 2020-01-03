@@ -407,6 +407,14 @@ double l2r_lr_fun::fun(double *w, double *g)
 	return(f);
 }
 
+__global__ void transform_xts(double* z, double* C, double* D, int l)
+{
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(i, l) {
+    z[i] *= C[i] * D[i];
+  }
+}
+
 void l2r_lr_fun::grad(double *w, double *g)
 {
 	int i;
@@ -470,18 +478,36 @@ void l2r_lr_fun::Hv(double *s, double *Hs)
 	int l=prob->l;
 	int w_size=get_nr_variable();
 	feature_node **x=prob->x;
+	double alphaCu = 1.0;
+	double betaCu = 0.0;
 
-	for(i=0;i<w_size;i++)
-		Hs[i] = 0;
-	for(i=0;i<l;i++)
-	{
-		feature_node * const xi=x[i];
-		double xTs = sparse_operator::dot(s, xi);
+	checkCudaErrors(cudaMemcpyAsync(dev_w, s, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	// CHECK_CUSPARSE( 
+	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+		     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
+		     CUSPARSE_CSRMV_ALG1, NULL); 
+			// )
 
-		xTs = C[i]*D[i]*xTs;
+       transform_xts<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+	  (dev_z, dev_C, dev_D, l);
+	// CHECK_CUSPARSE( 
+       cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
+		    &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
+		    CUSPARSE_CSRMV_ALG1, NULL);
+// )
+	checkCudaErrors(cudaMemcpyAsync(Hs, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
+	// for(i=0;i<w_size;i++)
+	// 	Hs[i] = 0;
+	// for(i=0;i<l;i++)
+	// {
+	// 	feature_node * const xi=x[i];
+	// 	double xTs = sparse_operator::dot(s, xi);
 
-		sparse_operator::axpy(xTs, xi, Hs);
-	}
+	// 	xTs = C[i]*D[i]*xTs;
+
+	// 	sparse_operator::axpy(xTs, xi, Hs);
+	// }
 	for(i=0;i<w_size;i++)
 		Hs[i] = s[i] + Hs[i];
 }
