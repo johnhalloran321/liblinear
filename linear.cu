@@ -341,6 +341,20 @@ void l2r_lr_fun::sync_deStreams(){
   checkCudaErrors(cudaStreamSynchronize(*streamE));
 }
 
+__global__ void ready_accumulator(double* z, double* C, double* y, double* acc, int l)
+{
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(i, l) {
+    double yz = y[i]*z[i];
+    z[i] = yz;
+    if (yz >= 0) {
+      acc[i] = C[i]*log(1 + exp(-yz));
+    } else {
+      acc[i] = C[i]*(-yz+log(1 + exp(yz)));
+    }
+  }
+}
+
 double l2r_lr_fun::fun(double *w)
 {
 	int i;
@@ -358,23 +372,24 @@ double l2r_lr_fun::fun(double *w)
 	CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
 				     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
 				     CUSPARSE_CSRMV_ALG1, NULL) )
-	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
-	// // z = y.*z
-	// thrust::transform(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_y, dev_z, binary_op2);
-	// // for z > 0, f += z.*z.*C
-	// f += thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + l, dev_C, init,  binary_op, fun_multiply_op());
 
-	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+       ready_accumulator<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+	  (dev_z, dev_C, dev_y, dev_acc, l);
+	f += thrust::reduce(thrust::cuda::par.on(*stream), dev_acc, dev_acc + l, (double) 0,  thrust::plus<double>());
+
+	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
+
+	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
 	checkCudaErrors(cudaStreamSynchronize(*stream));
 
-	for(i=0;i<l;i++)
-	{
-		double yz = y[i]*z[i];
-		if (yz >= 0)
-			f += C[i]*log(1 + exp(-yz));
-		else
-			f += C[i]*(-yz+log(1 + exp(yz)));
-	}
+	// for(i=0;i<l;i++)
+	// {
+	// 	double yz = y[i]*z[i];
+	// 	if (yz >= 0)
+	// 		f += C[i]*log(1 + exp(-yz));
+	// 	else
+	// 		f += C[i]*(-yz+log(1 + exp(yz)));
+	// }
 
 	return(f);
 }
@@ -386,9 +401,11 @@ void l2r_lr_fun::grad(double *w, double *g)
 	int l=prob->l;
 	int w_size=get_nr_variable();
 
+	checkCudaErrors(cudaStreamSynchronize(*streamB));
 	for(i=0;i<l;i++)
 	{
-		z[i] = 1/(1 + exp(-y[i]*z[i]));
+		// z[i] = 1/(1 + exp(-y[i]*z[i]));
+		z[i] = 1/(1 + exp(-z[i]));
 		D[i] = z[i]*(1-z[i]);
 		z[i] = C[i]*(z[i]-1)*y[i];
 	}
