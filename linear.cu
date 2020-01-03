@@ -194,7 +194,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	/////////// Cuda variables
 	// // Pin memory
 	checkCudaErrors(cudaMallocHost((void** )&D, l * sizeof(double)));
-	checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
+	// checkCudaErrors(cudaMallocHost((void** )&z, l * sizeof(double)));
 	// Cuda device side variables
 	checkCudaErrors(cudaMalloc((void** )&dev_w, n * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_y, l * sizeof(double)));
@@ -304,7 +304,7 @@ l2r_lr_fun::~l2r_lr_fun()
 	// delete[] z;
 	// delete[] D;
 
-	checkCudaErrors(cudaFreeHost(z));
+	// checkCudaErrors(cudaFreeHost(z));
 	checkCudaErrors(cudaFreeHost(D));
 	checkCudaErrors(cudaFree(dev_z));
 	checkCudaErrors(cudaFree(dev_D));
