@@ -420,7 +420,7 @@ double l2r_lr_fun::fun(double *w, double *g)
 	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 
 	checkCudaErrors(cudaStreamSynchronize(*stream));
-	// checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
+	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
 	checkCudaErrors(cudaMemcpyAsync(D, dev_D, l * sizeof(double), cudaMemcpyDeviceToHost, *streamC));
 
 	// for(i=0;i<l;i++)
@@ -452,40 +452,34 @@ void l2r_lr_fun::grad(double *w, double *g)
 	double alphaCu = 1.0;
 	double betaCu = 0.0;
 
-	// checkCudaErrors(cudaStreamSynchronize(*streamB));
-	// checkCudaErrors(cudaStreamSynchronize(*streamC));
-	// for(i=0;i<l;i++)
-	// {
-	// 	// z[i] = 1/(1 + exp(-y[i]*z[i]));
-	// 	// z[i] = 1/(1 + exp(-z[i]));
-	// 	D[i] = z[i]*(1-z[i]);
-	// 	z[i] = C[i]*(z[i]-1)*y[i];
-	// }
-	// XTv(z, g);
+	checkCudaErrors(cudaStreamSynchronize(*streamB));
+	checkCudaErrors(cudaStreamSynchronize(*streamC));
+	XTv(z, g);
 
 	// CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
 	// 			     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
 	// 			     CUSPARSE_CSRMV_ALG1, NULL) )
 	// checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-
-	cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-		     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
-		     CUSPARSE_CSRMV_ALG1, NULL);
-	checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-
 	// checkCudaErrors(cudaStreamSynchronize(*stream));
-	// for(i=0;i<w_size;i++)
-	// 	g[i] = w[i] + g[i];
+
+	for(i=0;i<w_size;i++)
+		g[i] = w[i] + g[i];
+
+	// cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
+	// 	     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
+	// 	     CUSPARSE_CSRMV_ALG1, NULL);
+	// checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+
 }
 
 void l2r_lr_fun::grad_sync(double *w, double *g)
 {
-	int i;
-	int w_size=get_nr_variable();
+	// int i;
+	// int w_size=get_nr_variable();
 
-	checkCudaErrors(cudaStreamSynchronize(*stream));
-	for(i=0;i<w_size;i++)
-		g[i] = w[i] + g[i];
+	// checkCudaErrors(cudaStreamSynchronize(*stream));
+	// for(i=0;i<w_size;i++)
+	// 	g[i] = w[i] + g[i];
 }
 
 int l2r_lr_fun::get_nr_variable(void)
@@ -2833,7 +2827,21 @@ static void train_one(const problem *prob, const parameter *param, double *w, do
 			fun_obj=new l2r_lr_fun(prob, C);
 			TRON tron_obj(fun_obj, primal_solver_tol, eps_cg);
 			tron_obj.set_print_string(liblinear_print_string);
+
+			time_t startTRAINTime;
+			time(&startTRAINTime);
+			clock_t startTRAINClock = clock();
+
 			tron_obj.tron(w);
+
+			time_t procTRAINStart;
+			clock_t procTRAINStartClock = clock();
+			time(&procTRAINStart);
+			double diffTRAIN = difftime(procTRAINStart,startTRAINTime);
+
+			info("Training took = %f cpu seconds, %f seconds wall clock time.\n", 
+			     ((double)(procTRAINStartClock - startTRAINClock)) / (double)CLOCKS_PER_SEC, diffTRAIN);
+
 			delete fun_obj;
 			delete[] C;
 			break;
@@ -2851,7 +2859,21 @@ static void train_one(const problem *prob, const parameter *param, double *w, do
 			fun_obj=new l2r_l2_svc_fun(prob, C);
 			TRON tron_obj(fun_obj, primal_solver_tol, eps_cg);
 			tron_obj.set_print_string(liblinear_print_string);
+
+			time_t startTRAINTime;
+			time(&startTRAINTime);
+			clock_t startTRAINClock = clock();
+
 			tron_obj.tron(w);
+
+			time_t procTRAINStart;
+			clock_t procTRAINStartClock = clock();
+			time(&procTRAINStart);
+			double diffTRAIN = difftime(procTRAINStart,startTRAINTime);
+
+			info("Training took = %f cpu seconds, %f seconds wall clock time.\n", 
+			     ((double)(procTRAINStartClock - startTRAINClock)) / (double)CLOCKS_PER_SEC, diffTRAIN);
+
 			delete fun_obj;
 			delete[] C;
 			break;
@@ -2896,7 +2918,18 @@ static void train_one(const problem *prob, const parameter *param, double *w, do
 			fun_obj=new l2r_l2_svr_fun(prob, C, param->p);
 			TRON tron_obj(fun_obj, param->eps);
 			tron_obj.set_print_string(liblinear_print_string);
+
+			time_t startTRAINTime;
+			time(&startTRAINTime);
+			clock_t startTRAINClock = clock();
+
 			tron_obj.tron(w);
+
+			time_t procTRAINStart;
+			clock_t procTRAINStartClock = clock();
+			time(&procTRAINStart);
+			double diffTRAIN = difftime(procTRAINStart,startTRAINTime);
+
 			delete fun_obj;
 			delete[] C;
 			break;
