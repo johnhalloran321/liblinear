@@ -540,8 +540,14 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	double *d = new double[n];
 	double *Hd = new double[n];
 	double *z = new double[n];
-	double *dev_d, *dev_Hd, *dev_z, *dev_g, *dev_M, *dev_s, *dev_r;
+	double *dev_d, *dev_Hd, *dev_z, *dev_g, *dev_M, *dev_s, *dev_r, *acc1;
 	cudaStream_t *stream;
+
+	double sMnorm = 0;
+	double sTMd = 0;
+	double sTMs = 0;
+	double dTMd = 0;
+
 
 	stream = new cudaStream_t;
 	checkCudaErrors(cudaStreamCreateWithFlags(stream, cudaStreamNonBlocking));
@@ -549,6 +555,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	checkCudaErrors(cudaMalloc((void** )&dev_d, n * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_Hd, n * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_z, n * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&acc1, n * sizeof(double)));
 	// 
 	checkCudaErrors(cudaMalloc((void** )&dev_g, n * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_M, n * sizeof(double)));
@@ -591,21 +598,57 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		cg_iter++;
 		fun_obj->Hv(d, Hd);
 
-		alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
-		daxpy_(&n, &alpha, d, &inc, s, &inc);
+		// alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
+		// daxpy_(&n, &alpha, d, &inc, s, &inc);
+		// double sMnorm = sqrt(uTMv(n, s, M, s));
 
-		double sMnorm = sqrt(uTMv(n, s, M, s));
+		checkCudaErrors(cudaMemcpyAsync(dev_d, d, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+		checkCudaErrors(cudaMemcpyAsync(dev_Hd, Hd, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+		checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+
+		alpha = zTr / thrust::inner_product(thrust::cuda::par.on(*stream), dev_d, dev_d + n, dev_Hd, (double) 0);
+		dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+		  (n, alpha, dev_d, dev_s);
+
+		dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
+		  (n, dev_s, dev_M, dev_s, acc1);
+		sMnorm = sqrt(thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>()));
+
+		checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+		checkCudaErrors(cudaStreamSynchronize(*stream));
+		
+		// sMnorm = sqrt(sMnorm);
+		// sMnorm = sqrt(uTMv(n, s, M, s));
 		if (sMnorm > delta)
 		{
 			info("cg reaches trust region boundary\n");
 			*reach_boundary = true;
 			alpha = -alpha;
-			daxpy_(&n, &alpha, d, &inc, s, &inc);
+			// daxpy_(&n, &alpha, d, &inc, s, &inc);
+			// double sTMd = uTMv(n, s, M, d);
+			// double sTMs = uTMv(n, s, M, s);
+			// double dTMd = uTMv(n, d, M, d);
 
-			double sTMd = uTMv(n, s, M, d);
-			double sTMs = uTMv(n, s, M, s);
-			double dTMd = uTMv(n, d, M, d);
+			dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+			  (n, alpha, dev_d, dev_s);
+			checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+
+			dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
+			  (n, dev_d, dev_M, dev_d, acc1);
+			dTMd = thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>());
+
+			dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
+			  (n, dev_s, dev_M, dev_s, acc1);
+			sTMs = thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>());
+
+			dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
+			  (n, dev_s, dev_M, dev_d, acc1);
+			sTMd = thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>());
+
+			checkCudaErrors(cudaStreamSynchronize(*stream));
+
 			double rad = sqrt(sTMd*sTMd + dTMd*(dsq-sTMs));
+
 			if (sTMd >= 0)
 				alpha = (dsq - sTMs)/(sTMd + rad);
 			else
@@ -613,6 +656,9 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 			daxpy_(&n, &alpha, d, &inc, s, &inc);
 			alpha = -alpha;
 			daxpy_(&n, &alpha, Hd, &inc, r, &inc);
+
+			// checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+			// checkCudaErrors(cudaStreamSynchronize(*stream));
 			break;
 		}
 		alpha = -alpha;
@@ -633,6 +679,11 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
  	checkCudaErrors(cudaFree(dev_d));
 	checkCudaErrors(cudaFree(dev_Hd));
 	checkCudaErrors(cudaFree(dev_z));
+ 	checkCudaErrors(cudaFree(acc1));
+ 	checkCudaErrors(cudaFree(dev_g));
+ 	checkCudaErrors(cudaFree(dev_M));
+ 	checkCudaErrors(cudaFree(dev_s));
+ 	checkCudaErrors(cudaFree(dev_r));
 	checkCudaErrors(cudaStreamDestroy(*stream));
 	delete stream;
 
