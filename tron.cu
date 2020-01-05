@@ -266,6 +266,13 @@ void TRON::tron(double *w)
 	double *r = new double[n];
 	double *g = new double[n];
 
+	double *dev_M;
+	double *dev_s;
+	double *dev_r;
+	// checkCudaErrors(cudaMalloc((void** )&dev_M, n * sizeof(double)));
+	// checkCudaErrors(cudaMalloc((void** )&dev_s, n * sizeof(double)));
+	// checkCudaErrors(cudaMalloc((void** )&dev_r, n * sizeof(double)));
+
 	const double alpha_pcg = 0.01;
 	double *M = new double[n];
 
@@ -308,7 +315,10 @@ void TRON::tron(double *w)
 	bool delta_adjusted = false;
 	while (iter <= max_iter && search)
 	{
-		cg_iter = trpcg(delta, g, M, s, r, &reach_boundary);
+	  // cg_iter = trpcg(delta, g, M, s, r, &reach_boundary, 
+	  // 		  dev_M, dev_s, dev_r);
+	  cg_iter = trpcg(delta, g, M, s, r, &reach_boundary); 
+			  // dev_M, dev_s, dev_r);
 
 		memcpy(w_new, w, sizeof(double)*n);
 		daxpy_(&n, &one, s, &inc, w_new, &inc);
@@ -394,30 +404,185 @@ void TRON::tron(double *w)
 	delete[] M;
 }
 
+// int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *reach_boundary)
+// {
+// 	int i, inc = 1;
+// 	int n = fun_obj->get_nr_variable();
+// 	double one = 1;
+// 	double zTr, znewTrnew, alpha, beta, cgtol;
+// 	double *d = new double[n];
+// 	double *Hd = new double[n];
+// 	double *z = new double[n];
+// 	double *dev_d;
+// 	double *dev_Hd;
+// 	double *dev_z;
+
+// 	*reach_boundary = false;
+// 	for (i=0; i<n; i++)
+// 	{
+// 		s[i] = 0;
+// 		r[i] = -g[i];
+// 		z[i] = r[i] / M[i];
+// 		d[i] = z[i];
+// 	}
+
+// 	zTr = ddot_(&n, z, &inc, r, &inc);
+// 	cgtol = eps_cg*sqrt(zTr);
+// 	int cg_iter = 0;
+// 	int max_cg_iter = max(n, 5);
+// 	double dsq = delta*delta;
+
+// 	while (cg_iter < max_cg_iter)
+// 	{
+// 		if (sqrt(zTr) <= cgtol)
+// 			break;
+// 		cg_iter++;
+// 		fun_obj->Hv(d, Hd);
+
+// 		alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
+// 		daxpy_(&n, &alpha, d, &inc, s, &inc);
+
+// 		double sMnorm = sqrt(uTMv(n, s, M, s));
+// 		if (sMnorm > delta)
+// 		{
+// 			info("cg reaches trust region boundary\n");
+// 			*reach_boundary = true;
+// 			alpha = -alpha;
+// 			daxpy_(&n, &alpha, d, &inc, s, &inc);
+
+// 			double sTMd = uTMv(n, s, M, d);
+// 			double sTMs = uTMv(n, s, M, s);
+// 			double dTMd = uTMv(n, d, M, d);
+// 			double rad = sqrt(sTMd*sTMd + dTMd*(dsq-sTMs));
+// 			if (sTMd >= 0)
+// 				alpha = (dsq - sTMs)/(sTMd + rad);
+// 			else
+// 				alpha = (rad - sTMd)/dTMd;
+// 			daxpy_(&n, &alpha, d, &inc, s, &inc);
+// 			alpha = -alpha;
+// 			daxpy_(&n, &alpha, Hd, &inc, r, &inc);
+// 			break;
+// 		}
+// 		alpha = -alpha;
+// 		daxpy_(&n, &alpha, Hd, &inc, r, &inc);
+
+// 		for (i=0; i<n; i++)
+// 			z[i] = r[i] / M[i];
+// 		znewTrnew = ddot_(&n, z, &inc, r, &inc);
+// 		beta = znewTrnew/zTr;
+// 		dscal_(&n, &beta, d, &inc);
+// 		daxpy_(&n, &one, z, &inc, d, &inc);
+// 		zTr = znewTrnew;
+// 	}
+
+// 	if (cg_iter == max_cg_iter)
+// 		info("WARNING: reaching maximal number of CG steps\n");
+	
+// 	delete[] d;
+// 	delete[] Hd;
+// 	delete[] z;
+
+// 	return(cg_iter);
+// }
+
+__global__ void init_vectors(double* s, double* r, double* z, double* d, int n, 
+			     double* g, double* M)
+{
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(i, n) {
+    s[i] = 0;
+    r[i] = -g[i];
+    z[i] = r[i] / M[i];
+    d[i] = z[i];
+  }
+}
+
+__global__ void dev_daxpy(int n, double alpha, double* x, double* y)
+{
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(r, n) {
+    y[r] += alpha * x[r];
+  }
+}
+
+__global__ void dev_uTMv(int n, double *u, double *M, double *v, double* acc)
+{
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(r, n) {
+    acc[r] = u[r] * M[r] * v[r];
+  }
+}
+
+__global__ void dev_div(int n, double *z, double *r, double *M)
+{
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(i, n) {
+    z[i] = r[i] / M[i];
+  }
+}
+
+__global__ void dev_dscal_daxpy(int n, double beta, double* z, double* d)
+{
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(i, n) {
+    d[i] = z[i] + beta * d[i];
+  }
+}
+
 int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *reach_boundary)
+// , 
+// 		double* dev_M, double* dev_s, double* dev_r)
 {
 	int i, inc = 1;
 	int n = fun_obj->get_nr_variable();
 	double one = 1;
+	double zTr, znewTrnew, alpha, beta, cgtol;
 	double *d = new double[n];
 	double *Hd = new double[n];
-	double zTr, znewTrnew, alpha, beta, cgtol;
 	double *z = new double[n];
+	double *dev_d, *dev_Hd, *dev_z, *dev_g, *dev_M, *dev_s, *dev_r;
+	cudaStream_t *stream;
+
+	stream = new cudaStream_t;
+	checkCudaErrors(cudaStreamCreateWithFlags(stream, cudaStreamNonBlocking));
+
+	checkCudaErrors(cudaMalloc((void** )&dev_d, n * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_Hd, n * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_z, n * sizeof(double)));
+	// 
+	checkCudaErrors(cudaMalloc((void** )&dev_g, n * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_M, n * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_s, n * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_r, n * sizeof(double)));
+
+	checkCudaErrors(cudaMemcpyAsync(dev_g, g, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_M, M, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_r, r, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
 
 	*reach_boundary = false;
-	for (i=0; i<n; i++)
-	{
-		s[i] = 0;
-		r[i] = -g[i];
-		z[i] = r[i] / M[i];
-		d[i] = z[i];
-	}
+	// for (i=0; i<n; i++)
+	// {
+	// 	s[i] = 0;
+	// 	r[i] = -g[i];
+	// 	z[i] = r[i] / M[i];
+	// 	d[i] = z[i];
+	// }
 
-	zTr = ddot_(&n, z, &inc, r, &inc);
+	init_vectors <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> (dev_s, dev_r, dev_z, dev_d, n, dev_g, dev_M);
+
+	// zTr = ddot_(&n, z, &inc, r, &inc);
+	zTr = thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + n, dev_r, (double) 0);
 	cgtol = eps_cg*sqrt(zTr);
 	int cg_iter = 0;
 	int max_cg_iter = max(n, 5);
 	double dsq = delta*delta;
+
+	checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaMemcpyAsync(z, dev_z, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaMemcpyAsync(d, dev_d, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
 
 	while (cg_iter < max_cg_iter)
 	{
@@ -465,6 +630,12 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	if (cg_iter == max_cg_iter)
 		info("WARNING: reaching maximal number of CG steps\n");
 	
+ 	checkCudaErrors(cudaFree(dev_d));
+	checkCudaErrors(cudaFree(dev_Hd));
+	checkCudaErrors(cudaFree(dev_z));
+	checkCudaErrors(cudaStreamDestroy(*stream));
+	delete stream;
+
 	delete[] d;
 	delete[] Hd;
 	delete[] z;

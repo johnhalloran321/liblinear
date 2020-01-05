@@ -453,7 +453,7 @@ void l2r_lr_fun::grad(double *w, double *g)
 	double betaCu = 0.0;
 
 	checkCudaErrors(cudaStreamSynchronize(*streamB));
-	checkCudaErrors(cudaStreamSynchronize(*streamC));
+	// checkCudaErrors(cudaStreamSynchronize(*streamC));
 	XTv(z, g);
 
 	// CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,

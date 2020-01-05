@@ -53,6 +53,8 @@ public:
 
 private:
 	int trpcg(double delta, double *g, double *M, double *s, double *r, bool *reach_boundary);
+	int trpcg(double delta, double *g, double *M, double *s, double *r, bool *reach_boundary, 
+		  double* dev_M, double* dev_s, double* dev_r);
 	double norm_inf(int n, double *x);
 
 	double eps;
