@@ -604,7 +604,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 
 		checkCudaErrors(cudaMemcpyAsync(dev_d, d, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
 		checkCudaErrors(cudaMemcpyAsync(dev_Hd, Hd, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
-		checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+		// checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
 
 		alpha = zTr / thrust::inner_product(thrust::cuda::par.on(*stream), dev_d, dev_d + n, dev_Hd, (double) 0);
 		dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
@@ -615,7 +615,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		sMnorm = sqrt(thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>()));
 
 		// checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-		checkCudaErrors(cudaStreamSynchronize(*stream));
+		// checkCudaErrors(cudaStreamSynchronize(*stream));
 		
 		// sMnorm = sqrt(sMnorm);
 		// sMnorm = sqrt(uTMv(n, s, M, s));
@@ -631,7 +631,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 
 			dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
 			  (n, alpha, dev_d, dev_s);
-			checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+			// checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 
 			dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
 			  (n, dev_d, dev_M, dev_d, acc1);
@@ -674,10 +674,10 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 			// checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
 			// checkCudaErrors(cudaStreamSynchronize(*stream));
 			break;
-		} else {
-		  checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-		  checkCudaErrors(cudaStreamSynchronize(*stream));
-		}
+		} // else {
+		//   checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+		//   checkCudaErrors(cudaStreamSynchronize(*stream));
+		// }
 		alpha = -alpha;
 		daxpy_(&n, &alpha, Hd, &inc, r, &inc);
 
@@ -689,6 +689,9 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		daxpy_(&n, &one, z, &inc, d, &inc);
 		zTr = znewTrnew;
 	}
+
+	checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
 
 	if (cg_iter == max_cg_iter)
 		info("WARNING: reaching maximal number of CG steps\n");
