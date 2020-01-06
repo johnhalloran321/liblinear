@@ -596,6 +596,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		if (sqrt(zTr) <= cgtol)
 			break;
 		cg_iter++;
+		checkCudaErrors(cudaStreamSynchronize(*stream));
 		fun_obj->Hv(d, Hd);
 
 		// alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
@@ -669,24 +670,37 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 			checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 
 			alpha = -alpha;
-
-			checkCudaErrors(cudaStreamSynchronize(*stream));
-			// checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
-			// checkCudaErrors(cudaStreamSynchronize(*stream));
 			break;
 		} // else {
 		//   checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+		//   checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 		//   checkCudaErrors(cudaStreamSynchronize(*stream));
 		// }
-		alpha = -alpha;
-		daxpy_(&n, &alpha, Hd, &inc, r, &inc);
+		// checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 
-		for (i=0; i<n; i++)
-			z[i] = r[i] / M[i];
-		znewTrnew = ddot_(&n, z, &inc, r, &inc);
+		alpha = -alpha;
+		// checkCudaErrors(cudaStreamSynchronize(*stream));
+		dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+		  (n, alpha, dev_Hd, dev_r);
+		checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+		// daxpy_(&n, &alpha, Hd, &inc, r, &inc);
+		// checkCudaErrors(cudaStreamSynchronize(*stream));
+
+		// for (i=0; i<n; i++)
+		// 	z[i] = r[i] / M[i];
+		dev_div <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+		  (n, dev_z, dev_r, dev_M);
+		// checkCudaErrors(cudaMemcpyAsync(z, dev_z, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+		// znewTrnew = ddot_(&n, z, &inc, r, &inc);
+		znewTrnew = thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + n, dev_r, (double) 0);
+		// checkCudaErrors(cudaStreamSynchronize(*stream));
 		beta = znewTrnew/zTr;
-		dscal_(&n, &beta, d, &inc);
-		daxpy_(&n, &one, z, &inc, d, &inc);
+		// dscal_(&n, &beta, d, &inc);
+		// daxpy_(&n, &one, z, &inc, d, &inc);
+		dev_dscal_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+		  (n, beta, dev_z, dev_d);
+		checkCudaErrors(cudaMemcpyAsync(d, dev_d, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+		// checkCudaErrors(cudaStreamSynchronize(*stream));
 		zTr = znewTrnew;
 	}
 
