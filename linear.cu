@@ -534,21 +534,14 @@ void l2r_lr_fun::Hv(double *s, double *Hs,
 	double alphaCu = 1.0;
 	double betaCu = 0.0;
 
-// 	// checkCudaErrors(cudaMemcpyAsync(dev_w, s, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
-// 	// CHECK_CUSPARSE( 
 	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
 		     &alphaCu, *matA, *vecS, &betaCu, *vecY, CUDA_R_64F,
 		     CUSPARSE_CSRMV_ALG1, NULL); 
-			// )
-
        transform_xts<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
 	  (dev_z, dev_C, dev_D, l);
-	// CHECK_CUSPARSE( 
        cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
 		    &alphaCu, *matA, *vecY, &betaCu, *vecHs, CUDA_R_64F,
 		    CUSPARSE_CSRMV_ALG1, NULL);
-// )
-// 	// checkCudaErrors(cudaMemcpyAsync(Hs, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	checkCudaErrors(cudaStreamSynchronize(*stream));
 
 	// for(i=0;i<w_size;i++)
