@@ -706,7 +706,6 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 
 	checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-	checkCudaErrors(cudaStreamSynchronize(*stream));
 
 	if (cg_iter == max_cg_iter)
 		info("WARNING: reaching maximal number of CG steps\n");
@@ -717,6 +716,9 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
  	checkCudaErrors(cudaFree(acc1));
  	checkCudaErrors(cudaFree(dev_g));
  	checkCudaErrors(cudaFree(dev_M));
+
+	checkCudaErrors(cudaStreamSynchronize(*stream));
+
  	checkCudaErrors(cudaFree(dev_s));
  	checkCudaErrors(cudaFree(dev_r));
 	checkCudaErrors(cudaStreamDestroy(*stream));
