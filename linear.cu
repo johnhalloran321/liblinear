@@ -146,10 +146,10 @@ public:
         void transfer_w(double *w);
         double fun0(double* g);
         double fun(double *w, double *g);
-  void grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG);
-	void grad_sync(double *w, double *g);
-        void Hv(double *s, double *Hs, 
-		cusparseDnVecDescr_t *vecS, cusparseDnVecDescr_t *vecHs);
+        double grad(double *w, double *g, double* dev_g, 
+		    cusparseDnVecDescr_t *vecG);
+        void grad_sync(double *w, double *g, double *dev_g);
+        void Hv(double *s, double *Hs);
 
 	int get_nr_variable(void);
 	void get_diag_preconditioner(double *M);
@@ -169,9 +169,9 @@ private:
   double* dev_C;
   double* dev_D;
   double* dev_acc;
-  double* dev_csrValA;
-  int* dev_csrRowIndA;
-  int* dev_csrColIndA;
+  double* dev_cooValA;
+  int* dev_cooRowIndA;
+  int* dev_cooColIndA;
   int nnz;
   cusparseSpMatDescr_t *matA;
   cusparseDnVecDescr_t *vecX, *vecY;
@@ -249,27 +249,27 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	}
 
 	// Create Matrix and allocate device-side matrix storage
-	checkCudaErrors(cudaMalloc((void** )&dev_csrValA, nnz * sizeof(double)));
-	checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, (l+1) * sizeof(int)));
-	checkCudaErrors(cudaMalloc((void** )&dev_csrColIndA, nnz * sizeof(int)));
+	checkCudaErrors(cudaMalloc((void** )&dev_cooValA, nnz * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_cooRowIndA, nnz * sizeof(int)));
+	checkCudaErrors(cudaMalloc((void** )&dev_cooColIndA, nnz * sizeof(int)));
 	// 
 
-	double* csrValA = new double[nnz];
-	int* csrRowIndA = new int[l+1];
-	int* csrColIndA = new int[nnz];
+	double* cooValA = new double[nnz];
+	int* cooRowIndA = new int[nnz];
+	int* cooColIndA = new int[nnz];
 	int ind = 0;
 	info("nnz=%d, ind=%d, n=%d, l=%d\n", nnz, ind, n, l);
-	csrRowIndA[0] = 0;
+	cooRowIndA[0] = 0;
 	for(int i=0;i<l;i++){
 	  feature_node *x = prob->x[i];
 	  while(x->index != -1)
 	    {
-	      csrValA[ind] = x->value;
-	      csrColIndA[ind] = x->index-1;
+	      cooValA[ind] = x->value;
+	      cooColIndA[ind] = x->index-1;
+	      cooRowIndA[ind] = i;
 	      x++;
 	      ind++;
 	    }
-	  csrRowIndA[i+1] = ind;
 	}
 	info("nnz=%d, ind=%d\n", nnz, ind);
 
@@ -282,13 +282,13 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	     ((double)(procCsrMatClock - startCsrMatClock)) / (double)CLOCKS_PER_SEC, diffCsr);
 
 
-	checkCudaErrors(cudaMemcpyAsync(dev_csrValA, csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
-	checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, csrRowIndA, (l+1) * sizeof(int), cudaMemcpyHostToDevice, *streamB));
-	checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
+	checkCudaErrors(cudaMemcpyAsync(dev_cooValA, cooValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_cooRowIndA, cooRowIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamB));
+	checkCudaErrors(cudaMemcpyAsync(dev_cooColIndA, cooColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
 
-	cusparseCreateCsr(matA, l, n, nnz,
-			  dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
-			  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+	cusparseCreateCoo(matA, l, n, nnz,
+			  dev_cooRowIndA, dev_cooColIndA, dev_cooValA,
+			  CUSPARSE_INDEX_32I,
 			  CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
 
 	time_t procSVMStart;
@@ -299,9 +299,9 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	info("Device initialization took = %f cpu seconds, %f seconds wall clock time.\n", 
 	     ((double)(procSVMStartClock - startSVMClock)) / (double)CLOCKS_PER_SEC, diffSVM);
 
-	delete [] csrValA;
-	delete [] csrRowIndA;
-	delete [] csrColIndA;
+	delete [] cooValA;
+	delete [] cooRowIndA;
+	delete [] cooColIndA;
 }
 
 l2r_lr_fun::~l2r_lr_fun()
@@ -317,9 +317,9 @@ l2r_lr_fun::~l2r_lr_fun()
 	checkCudaErrors(cudaFree(dev_y));
 	checkCudaErrors(cudaFree(dev_C));
 	checkCudaErrors(cudaFree(dev_acc));
-	checkCudaErrors(cudaFree(dev_csrValA));
-	checkCudaErrors(cudaFree(dev_csrRowIndA));
-	checkCudaErrors(cudaFree(dev_csrColIndA));
+	checkCudaErrors(cudaFree(dev_cooValA));
+	checkCudaErrors(cudaFree(dev_cooRowIndA));
+	checkCudaErrors(cudaFree(dev_cooColIndA));
 
 	cusparseDestroySpMat(*matA);
 	cusparseDestroyDnVec(*vecX);
@@ -424,7 +424,7 @@ double l2r_lr_fun::fun(double *w, double *g)
 	// checkCudaErrors(cudaMemcpyAsync(dev_w, w, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
 				     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
-				     CUSPARSE_CSRMV_ALG1, NULL) )
+				     CUSPARSE_COOMV_ALG, NULL) )
 
        ready_accumulator<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
 	  (dev_z, dev_C, dev_D, dev_y, dev_acc, l);
@@ -464,7 +464,7 @@ __global__ void dev_daxpyA(int n, double alpha, double* x, double* y)
   }
 }
 
-void l2r_lr_fun::grad(double *w, double *g, 
+double l2r_lr_fun::grad(double *w, double *g, 
 		      double* dev_g, cusparseDnVecDescr_t *vecG)
 {
 	int i;
@@ -480,10 +480,13 @@ void l2r_lr_fun::grad(double *w, double *g,
 
 	cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
 		     &alphaCu, *matA, *vecY, &betaCu, *vecG, CUDA_R_64F,
-		     CUSPARSE_CSRMV_ALG1, NULL);
+		     CUSPARSE_COOMV_ALG, NULL);
 	  dev_daxpyA <<< GET_BLOCKS_VAR(w_size, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
 	  (w_size, (double) 1, dev_w, dev_g);
-	checkCudaErrors(cudaMemcpyAsync(g, dev_g, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	  
+	  double gnorm = sqrt(thrust::transform_reduce(thrust::cuda::par.on(*stream), dev_g, dev_g + w_size, thrust::square<double>(), (double) 0,  thrust::plus<double>()));
+
+	  return(gnorm);
 	// checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	// checkCudaErrors(cudaStreamSynchronize(*stream));
 
@@ -497,12 +500,13 @@ void l2r_lr_fun::grad(double *w, double *g,
 
 }
 
-void l2r_lr_fun::grad_sync(double *w, double *g)
+void l2r_lr_fun::grad_sync(double *w, double *g, double* dev_g)
 {
 	// int i;
-	// int w_size=get_nr_variable();
+	int w_size=get_nr_variable();
 
 	checkCudaErrors(cudaStreamSynchronize(*stream));
+	checkCudaErrors(cudaMemcpyAsync(g, dev_g, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	// for(i=0;i<w_size;i++)
 	// 	g[i] = w[i] + g[i];
 }
@@ -536,39 +540,26 @@ void l2r_lr_fun::get_diag_preconditioner(double *M)
 	}
 }
 
-void l2r_lr_fun::Hv(double *s, double *Hs, 
-		    cusparseDnVecDescr_t *vecS, cusparseDnVecDescr_t *vecHs)
+void l2r_lr_fun::Hv(double *s, double *Hs)
 {
 	int i;
 	int l=prob->l;
 	int w_size=get_nr_variable();
 	feature_node **x=prob->x;
-	double alphaCu = 1.0;
-	double betaCu = 0.0;
 
-	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-		     &alphaCu, *matA, *vecS, &betaCu, *vecY, CUDA_R_64F,
-		     CUSPARSE_CSRMV_ALG1, NULL); 
-       transform_xts<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-	  (dev_z, dev_C, dev_D, l);
-       cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-		    &alphaCu, *matA, *vecY, &betaCu, *vecHs, CUDA_R_64F,
-		    CUSPARSE_CSRMV_ALG1, NULL);
-	checkCudaErrors(cudaStreamSynchronize(*stream));
+	for(i=0;i<w_size;i++)
+		Hs[i] = 0;
+	for(i=0;i<l;i++)
+	{
+		feature_node * const xi=x[i];
+		double xTs = sparse_operator::dot(s, xi);
 
-	// for(i=0;i<w_size;i++)
-	// 	Hs[i] = 0;
-	// for(i=0;i<l;i++)
-	// {
-	// 	feature_node * const xi=x[i];
-	// 	double xTs = sparse_operator::dot(s, xi);
+		xTs = C[i]*D[i]*xTs;
 
-	// 	xTs = C[i]*D[i]*xTs;
-
-	// 	sparse_operator::axpy(xTs, xi, Hs);
-	// }
-	// for(i=0;i<w_size;i++)
-	// 	Hs[i] = s[i] + Hs[i];
+		sparse_operator::axpy(xTs, xi, Hs);
+	}
+	for(i=0;i<w_size;i++)
+		Hs[i] = s[i] + Hs[i];
 }
 
 void l2r_lr_fun::Xv(double *v, double *Xv)
@@ -607,10 +598,10 @@ public:
   void transfer_w(double *w);
   double fun0(double* g);
   double fun(double *w, double *g);
-  void grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG);
-  void grad_sync(double *w, double *g);
-  void Hv(double *s, double *Hs, 
-	  cusparseDnVecDescr_t *vecS, cusparseDnVecDescr_t *vecHs);
+  double grad(double *w, double *g, 
+	      double* dev_g, cusparseDnVecDescr_t *vecG);
+  void grad_sync(double *w, double *g, double *dev_g);
+  void Hv(double *s, double *Hs);
 
   int get_nr_variable(void);
   void get_diag_preconditioner(double *M);
@@ -937,7 +928,7 @@ static int dev_find_id(cudaStream_t stream,
 }
 
 
-void l2r_l2_svc_fun::grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG)
+double l2r_l2_svc_fun::grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG)
 {
 	int i;
 	double *y=prob->y;
@@ -963,13 +954,15 @@ void l2r_l2_svc_fun::grad(double *w, double *g, double* dev_g, cusparseDnVecDesc
 
 	for(i=0;i<w_size;i++)
 		g[i] = w[i] + 2*g[i];
+
+	return 0;
 }
 
 void l2r_l2_svc_fun::transfer_w(double *w)
 {
 }
 
-void l2r_l2_svc_fun::grad_sync(double *w, double *g)
+void l2r_l2_svc_fun::grad_sync(double *w, double *g, double *dev_g)
 {
 }
 
@@ -999,8 +992,7 @@ void l2r_l2_svc_fun::get_diag_preconditioner(double *M)
 	}
 }
 
-void l2r_l2_svc_fun::Hv(double *s, double *Hs, 
-			cusparseDnVecDescr_t *vecS, cusparseDnVecDescr_t *vecHs)
+void l2r_l2_svc_fun::Hv(double *s, double *Hs)
 {
 	int i;
 	int w_size=get_nr_variable();
@@ -1062,8 +1054,9 @@ public:
         void transfer_w(double *w);
         double fun0(double* g);
         double fun(double *w, double* g);
-  void grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG);
-	void grad_sync(double *w, double *g);
+        double grad(double *w, double *g, 
+		    double* dev_g, cusparseDnVecDescr_t *vecG);
+	void grad_sync(double *w, double *g, double *dev_g);
 
 private:
 	double p;
@@ -1112,7 +1105,8 @@ double l2r_l2_svr_fun::fun(double *w, double* g)
 	return(f);
 }
 
-void l2r_l2_svr_fun::grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG)
+double l2r_l2_svr_fun::grad(double *w, double *g, 
+			  double* dev_g, cusparseDnVecDescr_t *vecG)
 {
 	int i;
 	double *y=prob->y;
@@ -1144,6 +1138,8 @@ void l2r_l2_svr_fun::grad(double *w, double *g, double* dev_g, cusparseDnVecDesc
 
 	for(i=0;i<w_size;i++)
 		g[i] = w[i] + 2*g[i];
+
+	return 0;
 }
 
 double l2r_l2_svr_fun::fun0(double* g)
@@ -1155,7 +1151,7 @@ void l2r_l2_svr_fun::transfer_w(double *w)
 {
 }
 
-void l2r_l2_svr_fun::grad_sync(double *w, double *g)
+void l2r_l2_svr_fun::grad_sync(double *w, double *g, double *dev_g)
 {
 }
 // A coordinate descent algorithm for

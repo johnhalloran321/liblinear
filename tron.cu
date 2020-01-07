@@ -293,8 +293,6 @@ void TRON::tron(double *w)
 	// Sync gradient stream
 	// fun_obj->grad_sync(w0, g);
 
-
-
 	double gnorm0 = dnrm2_(&n, g, &inc);
 	// delete [] w0;
 
@@ -302,34 +300,35 @@ void TRON::tron(double *w)
 	fun_obj->sync_csrStreams();
 
 	f = fun_obj->fun(w, g);
-	fun_obj->grad(w, g, dev_g, vecG);
+	double gnorm = fun_obj->grad(w, g, dev_g, vecG);
 
 	fun_obj->get_diag_preconditioner(M);
 	for(i=0; i<n; i++)
 		M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
 
-	fun_obj->grad_sync(w, g);
-	double gnorm = dnrm2_(&n, g, &inc);
+	fun_obj->grad_sync(w, g, dev_g);
+	// double gnorm = dnrm2_(&n, g, &inc);
 
 	if (gnorm <= eps*gnorm0)
 		search = 0;
 
-	delta = sqrt(uTMv(n, g, M, g));
+	fun_obj->sync_stream();
 
 	double *w_new = new double[n];
 	bool reach_boundary;
 	bool delta_adjusted = false;
+
+	delta = sqrt(uTMv(n, g, M, g));
+
 	while (iter <= max_iter && search)
 	{
-	  // cg_iter = trpcg(delta, g, M, s, r, &reach_boundary, 
-	  // 		  dev_M, dev_s, dev_r);
-	  cg_iter = trpcg(delta, dev_g, M, s, r, &reach_boundary); 
-			  // dev_M, dev_s, dev_r);
+	  cg_iter = trpcg(delta, g, M, s, r, &reach_boundary); 
 
 		memcpy(w_new, w, sizeof(double)*n);
 		daxpy_(&n, &one, s, &inc, w_new, &inc);
 
 		// Start next transfer w
+		fun_obj->sync_stream();
 		fun_obj->transfer_w(w_new);
 
 		gs = ddot_(&n, g, &inc, s, &inc);
@@ -375,13 +374,13 @@ void TRON::tron(double *w)
 			iter++;
 			memcpy(w, w_new, sizeof(double)*n);
 			f = fnew;
-			fun_obj->grad(w, g, dev_g, vecG);
+			gnorm = fun_obj->grad(w, g, dev_g, vecG);
 			fun_obj->get_diag_preconditioner(M);
 			for(i=0; i<n; i++)
 				M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
 			
-			fun_obj->grad_sync(w, g);
-			gnorm = dnrm2_(&n, g, &inc);
+			fun_obj->grad_sync(w, g, dev_g);
+			// gnorm = dnrm2_(&n, g, &inc);
 			if (gnorm <= eps*gnorm0)
 				break;
 		}
@@ -403,6 +402,10 @@ void TRON::tron(double *w)
 		}
 	}
 
+	checkCudaErrors(cudaFree(dev_g));
+	cusparseDestroyDnVec(*vecG);
+	delete vecG;
+
 	delete[] g;
 	delete[] r;
 	delete[] w_new;
@@ -410,86 +413,86 @@ void TRON::tron(double *w)
 	delete[] M;
 }
 
-// int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *reach_boundary)
-// {
-// 	int i, inc = 1;
-// 	int n = fun_obj->get_nr_variable();
-// 	double one = 1;
-// 	double zTr, znewTrnew, alpha, beta, cgtol;
-// 	double *d = new double[n];
-// 	double *Hd = new double[n];
-// 	double *z = new double[n];
-// 	double *dev_d;
-// 	double *dev_Hd;
-// 	double *dev_z;
+int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *reach_boundary)
+{
+	int i, inc = 1;
+	int n = fun_obj->get_nr_variable();
+	double one = 1;
+	double zTr, znewTrnew, alpha, beta, cgtol;
+	double *d = new double[n];
+	double *Hd = new double[n];
+	double *z = new double[n];
+	double *dev_d;
+	double *dev_Hd;
+	double *dev_z;
 
-// 	*reach_boundary = false;
-// 	for (i=0; i<n; i++)
-// 	{
-// 		s[i] = 0;
-// 		r[i] = -g[i];
-// 		z[i] = r[i] / M[i];
-// 		d[i] = z[i];
-// 	}
+	*reach_boundary = false;
+	for (i=0; i<n; i++)
+	{
+		s[i] = 0;
+		r[i] = -g[i];
+		z[i] = r[i] / M[i];
+		d[i] = z[i];
+	}
 
-// 	zTr = ddot_(&n, z, &inc, r, &inc);
-// 	cgtol = eps_cg*sqrt(zTr);
-// 	int cg_iter = 0;
-// 	int max_cg_iter = max(n, 5);
-// 	double dsq = delta*delta;
+	zTr = ddot_(&n, z, &inc, r, &inc);
+	cgtol = eps_cg*sqrt(zTr);
+	int cg_iter = 0;
+	int max_cg_iter = max(n, 5);
+	double dsq = delta*delta;
 
-// 	while (cg_iter < max_cg_iter)
-// 	{
-// 		if (sqrt(zTr) <= cgtol)
-// 			break;
-// 		cg_iter++;
-// 		fun_obj->Hv(d, Hd);
+	while (cg_iter < max_cg_iter)
+	{
+		if (sqrt(zTr) <= cgtol)
+			break;
+		cg_iter++;
+		fun_obj->Hv(d, Hd);
 
-// 		alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
-// 		daxpy_(&n, &alpha, d, &inc, s, &inc);
+		alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
+		daxpy_(&n, &alpha, d, &inc, s, &inc);
 
-// 		double sMnorm = sqrt(uTMv(n, s, M, s));
-// 		if (sMnorm > delta)
-// 		{
-// 			info("cg reaches trust region boundary\n");
-// 			*reach_boundary = true;
-// 			alpha = -alpha;
-// 			daxpy_(&n, &alpha, d, &inc, s, &inc);
+		double sMnorm = sqrt(uTMv(n, s, M, s));
+		if (sMnorm > delta)
+		{
+			info("cg reaches trust region boundary\n");
+			*reach_boundary = true;
+			alpha = -alpha;
+			daxpy_(&n, &alpha, d, &inc, s, &inc);
 
-// 			double sTMd = uTMv(n, s, M, d);
-// 			double sTMs = uTMv(n, s, M, s);
-// 			double dTMd = uTMv(n, d, M, d);
-// 			double rad = sqrt(sTMd*sTMd + dTMd*(dsq-sTMs));
-// 			if (sTMd >= 0)
-// 				alpha = (dsq - sTMs)/(sTMd + rad);
-// 			else
-// 				alpha = (rad - sTMd)/dTMd;
-// 			daxpy_(&n, &alpha, d, &inc, s, &inc);
-// 			alpha = -alpha;
-// 			daxpy_(&n, &alpha, Hd, &inc, r, &inc);
-// 			break;
-// 		}
-// 		alpha = -alpha;
-// 		daxpy_(&n, &alpha, Hd, &inc, r, &inc);
+			double sTMd = uTMv(n, s, M, d);
+			double sTMs = uTMv(n, s, M, s);
+			double dTMd = uTMv(n, d, M, d);
+			double rad = sqrt(sTMd*sTMd + dTMd*(dsq-sTMs));
+			if (sTMd >= 0)
+				alpha = (dsq - sTMs)/(sTMd + rad);
+			else
+				alpha = (rad - sTMd)/dTMd;
+			daxpy_(&n, &alpha, d, &inc, s, &inc);
+			alpha = -alpha;
+			daxpy_(&n, &alpha, Hd, &inc, r, &inc);
+			break;
+		}
+		alpha = -alpha;
+		daxpy_(&n, &alpha, Hd, &inc, r, &inc);
 
-// 		for (i=0; i<n; i++)
-// 			z[i] = r[i] / M[i];
-// 		znewTrnew = ddot_(&n, z, &inc, r, &inc);
-// 		beta = znewTrnew/zTr;
-// 		dscal_(&n, &beta, d, &inc);
-// 		daxpy_(&n, &one, z, &inc, d, &inc);
-// 		zTr = znewTrnew;
-// 	}
+		for (i=0; i<n; i++)
+			z[i] = r[i] / M[i];
+		znewTrnew = ddot_(&n, z, &inc, r, &inc);
+		beta = znewTrnew/zTr;
+		dscal_(&n, &beta, d, &inc);
+		daxpy_(&n, &one, z, &inc, d, &inc);
+		zTr = znewTrnew;
+	}
 
-// 	if (cg_iter == max_cg_iter)
-// 		info("WARNING: reaching maximal number of CG steps\n");
+	if (cg_iter == max_cg_iter)
+		info("WARNING: reaching maximal number of CG steps\n");
 	
-// 	delete[] d;
-// 	delete[] Hd;
-// 	delete[] z;
+	delete[] d;
+	delete[] Hd;
+	delete[] z;
 
-// 	return(cg_iter);
-// }
+	return(cg_iter);
+}
 
 __global__ void init_vectors(double* s, double* r, double* z, double* d, int n, 
 			     double* g, double* M)
@@ -535,222 +538,222 @@ __global__ void dev_dscal_daxpy(int n, double beta, double* z, double* d)
   }
 }
 
-int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *reach_boundary)
-// , 
-// 		double* dev_M, double* dev_s, double* dev_r)
-{
-	int i, inc = 1;
-	int n = fun_obj->get_nr_variable();
-	double one = 1;
-	double zTr, znewTrnew, alpha, beta, cgtol, negAlpha;
-	double *d = new double[n];
-	double *Hd = new double[n];
-	double *z = new double[n];
-	double *dev_d, *dev_Hd, *dev_z, *dev_M, *dev_s, *dev_r, *acc1;
-	cudaStream_t *stream;
-	cusparseDnVecDescr_t *vecD = new cusparseDnVecDescr_t;
-	cusparseDnVecDescr_t *vecHd = new cusparseDnVecDescr_t;
+// int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *reach_boundary)
+// // , 
+// // 		double* dev_M, double* dev_s, double* dev_r)
+// {
+// 	int i, inc = 1;
+// 	int n = fun_obj->get_nr_variable();
+// 	double one = 1;
+// 	double zTr, znewTrnew, alpha, beta, cgtol, negAlpha;
+// 	double *d = new double[n];
+// 	double *Hd = new double[n];
+// 	double *z = new double[n];
+// 	double *dev_d, *dev_Hd, *dev_z, *dev_M, *dev_s, *dev_r, *acc1;
+// 	cudaStream_t *stream;
+// 	cusparseDnVecDescr_t *vecD = new cusparseDnVecDescr_t;
+// 	cusparseDnVecDescr_t *vecHd = new cusparseDnVecDescr_t;
 
-	double sMnorm = 0;
-	double sTMd = 0;
-	double sTMs = 0;
-	double dTMd = 0;
+// 	double sMnorm = 0;
+// 	double sTMd = 0;
+// 	double sTMs = 0;
+// 	double dTMd = 0;
 
-	// fun_obj->set_stream(stream);
-	// stream = fun_obj->stream;
+// 	// fun_obj->set_stream(stream);
+// 	// stream = fun_obj->stream;
 
-	stream = new cudaStream_t;
-	checkCudaErrors(cudaStreamCreateWithFlags(stream, cudaStreamNonBlocking));
+// 	stream = new cudaStream_t;
+// 	checkCudaErrors(cudaStreamCreateWithFlags(stream, cudaStreamNonBlocking));
 
-	checkCudaErrors(cudaMalloc((void** )&dev_d, n * sizeof(double)));
-	checkCudaErrors(cudaMalloc((void** )&dev_Hd, n * sizeof(double)));
-	checkCudaErrors(cudaMalloc((void** )&dev_z, n * sizeof(double)));
-	checkCudaErrors(cudaMalloc((void** )&acc1, n * sizeof(double)));
-	// 
-	// checkCudaErrors(cudaMalloc((void** )&dev_g, n * sizeof(double)));
-	checkCudaErrors(cudaMalloc((void** )&dev_M, n * sizeof(double)));
-	checkCudaErrors(cudaMalloc((void** )&dev_s, n * sizeof(double)));
-	checkCudaErrors(cudaMalloc((void** )&dev_r, n * sizeof(double)));
+// 	checkCudaErrors(cudaMalloc((void** )&dev_d, n * sizeof(double)));
+// 	checkCudaErrors(cudaMalloc((void** )&dev_Hd, n * sizeof(double)));
+// 	checkCudaErrors(cudaMalloc((void** )&dev_z, n * sizeof(double)));
+// 	checkCudaErrors(cudaMalloc((void** )&acc1, n * sizeof(double)));
+// 	// 
+// 	// checkCudaErrors(cudaMalloc((void** )&dev_g, n * sizeof(double)));
+// 	checkCudaErrors(cudaMalloc((void** )&dev_M, n * sizeof(double)));
+// 	checkCudaErrors(cudaMalloc((void** )&dev_s, n * sizeof(double)));
+// 	checkCudaErrors(cudaMalloc((void** )&dev_r, n * sizeof(double)));
 
-	cusparseCreateDnVec(vecD, n, dev_d, CUDA_R_64F);
-	cusparseCreateDnVec(vecHd, n, dev_Hd, CUDA_R_64F);
+// 	cusparseCreateDnVec(vecD, n, dev_d, CUDA_R_64F);
+// 	cusparseCreateDnVec(vecHd, n, dev_Hd, CUDA_R_64F);
 
-	// checkCudaErrors(cudaMemcpyAsync(dev_g, g, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
-	checkCudaErrors(cudaMemcpyAsync(dev_M, M, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
-	checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
-	checkCudaErrors(cudaMemcpyAsync(dev_r, r, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+// 	// checkCudaErrors(cudaMemcpyAsync(dev_g, g, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+// 	checkCudaErrors(cudaMemcpyAsync(dev_M, M, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+// 	checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+// 	checkCudaErrors(cudaMemcpyAsync(dev_r, r, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
 
-	*reach_boundary = false;
-	// for (i=0; i<n; i++)
-	// {
-	// 	s[i] = 0;
-	// 	r[i] = -g[i];
-	// 	z[i] = r[i] / M[i];
-	// 	d[i] = z[i];
-	// }
+// 	*reach_boundary = false;
+// 	// for (i=0; i<n; i++)
+// 	// {
+// 	// 	s[i] = 0;
+// 	// 	r[i] = -g[i];
+// 	// 	z[i] = r[i] / M[i];
+// 	// 	d[i] = z[i];
+// 	// }
 
-	init_vectors <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> (dev_s, dev_r, dev_z, dev_d, n, g, dev_M);
+// 	init_vectors <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> (dev_s, dev_r, dev_z, dev_d, n, g, dev_M);
 
-	// zTr = ddot_(&n, z, &inc, r, &inc);
-	zTr = thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + n, dev_r, (double) 0);
-	cgtol = eps_cg*sqrt(zTr);
-	int cg_iter = 0;
-	int max_cg_iter = max(n, 5);
-	double dsq = delta*delta;
+// 	// zTr = ddot_(&n, z, &inc, r, &inc);
+// 	zTr = thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + n, dev_r, (double) 0);
+// 	cgtol = eps_cg*sqrt(zTr);
+// 	int cg_iter = 0;
+// 	int max_cg_iter = max(n, 5);
+// 	double dsq = delta*delta;
 
-	// checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-	// checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-	// checkCudaErrors(cudaMemcpyAsync(z, dev_z, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-	// checkCudaErrors(cudaMemcpyAsync(d, dev_d, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-	// checkCudaErrors(cudaStreamSynchronize(*stream));
+// 	// checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 	// checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 	// checkCudaErrors(cudaMemcpyAsync(z, dev_z, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 	// checkCudaErrors(cudaMemcpyAsync(d, dev_d, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 	// checkCudaErrors(cudaStreamSynchronize(*stream));
 
-	while (cg_iter < max_cg_iter)
-	{
-		if (sqrt(zTr) <= cgtol)
-			break;
-		cg_iter++;
-		checkCudaErrors(cudaStreamSynchronize(*stream));
-		fun_obj->Hv(d, Hd, vecD, vecHd);
+// 	while (cg_iter < max_cg_iter)
+// 	{
+// 		if (sqrt(zTr) <= cgtol)
+// 			break;
+// 		cg_iter++;
+// 		checkCudaErrors(cudaStreamSynchronize(*stream));
+// 		fun_obj->Hv(d, Hd, vecD, vecHd);
 
-		// alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
-		// daxpy_(&n, &alpha, d, &inc, s, &inc);
-		// double sMnorm = sqrt(uTMv(n, s, M, s));
+// 		// alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
+// 		// daxpy_(&n, &alpha, d, &inc, s, &inc);
+// 		// double sMnorm = sqrt(uTMv(n, s, M, s));
 
-		// checkCudaErrors(cudaMemcpyAsync(dev_Hd, Hd, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+// 		// checkCudaErrors(cudaMemcpyAsync(dev_Hd, Hd, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
 
-		dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-		  (n, (double) 1, dev_d, dev_Hd);
+// 		dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+// 		  (n, (double) 1, dev_d, dev_Hd);
 
-		// checkCudaErrors(cudaMemcpyAsync(dev_d, d, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
-		// checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+// 		// checkCudaErrors(cudaMemcpyAsync(dev_d, d, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+// 		// checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
 
-		alpha = zTr / thrust::inner_product(thrust::cuda::par.on(*stream), dev_d, dev_d + n, dev_Hd, (double) 0);
-		dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-		  (n, alpha, dev_d, dev_s);
+// 		alpha = zTr / thrust::inner_product(thrust::cuda::par.on(*stream), dev_d, dev_d + n, dev_Hd, (double) 0);
+// 		dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+// 		  (n, alpha, dev_d, dev_s);
 
-		dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
-		  (n, dev_s, dev_M, dev_s, acc1);
-		sMnorm = sqrt(thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>()));
+// 		dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
+// 		  (n, dev_s, dev_M, dev_s, acc1);
+// 		sMnorm = sqrt(thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>()));
 
-		// checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-		// checkCudaErrors(cudaStreamSynchronize(*stream));
+// 		// checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 		// checkCudaErrors(cudaStreamSynchronize(*stream));
 		
-		// sMnorm = sqrt(sMnorm);
-		// sMnorm = sqrt(uTMv(n, s, M, s));
-		if (sMnorm > delta)
-		{
-			info("cg reaches trust region boundary\n");
-			*reach_boundary = true;
-			alpha = -alpha;
-			// daxpy_(&n, &alpha, d, &inc, s, &inc);
-			// double sTMd = uTMv(n, s, M, d);
-			// double sTMs = uTMv(n, s, M, s);
-			// double dTMd = uTMv(n, d, M, d);
+// 		// sMnorm = sqrt(sMnorm);
+// 		// sMnorm = sqrt(uTMv(n, s, M, s));
+// 		if (sMnorm > delta)
+// 		{
+// 			info("cg reaches trust region boundary\n");
+// 			*reach_boundary = true;
+// 			alpha = -alpha;
+// 			// daxpy_(&n, &alpha, d, &inc, s, &inc);
+// 			// double sTMd = uTMv(n, s, M, d);
+// 			// double sTMs = uTMv(n, s, M, s);
+// 			// double dTMd = uTMv(n, d, M, d);
 
-			dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-			  (n, alpha, dev_d, dev_s);
-			// checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 			dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+// 			  (n, alpha, dev_d, dev_s);
+// 			// checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 
-			dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
-			  (n, dev_d, dev_M, dev_d, acc1);
-			dTMd = thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>());
+// 			dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
+// 			  (n, dev_d, dev_M, dev_d, acc1);
+// 			dTMd = thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>());
 
-			dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
-			  (n, dev_s, dev_M, dev_s, acc1);
-			sTMs = thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>());
+// 			dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
+// 			  (n, dev_s, dev_M, dev_s, acc1);
+// 			sTMs = thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>());
 
-			dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
-			  (n, dev_s, dev_M, dev_d, acc1);
-			sTMd = thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>());
+// 			dev_uTMv <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>>
+// 			  (n, dev_s, dev_M, dev_d, acc1);
+// 			sTMd = thrust::reduce(thrust::cuda::par.on(*stream), acc1, acc1 + n, (double) 0,  thrust::plus<double>());
 
-			// checkCudaErrors(cudaStreamSynchronize(*stream));
+// 			// checkCudaErrors(cudaStreamSynchronize(*stream));
 
-			double rad = sqrt(sTMd*sTMd + dTMd*(dsq-sTMs));
+// 			double rad = sqrt(sTMd*sTMd + dTMd*(dsq-sTMs));
 
-			if (sTMd >= 0){
-				alpha = (dsq - sTMs)/(sTMd + rad);
-				negAlpha = -alpha;
-			} else {
-				alpha = (rad - sTMd)/dTMd;
-				negAlpha = -alpha;
-			}
+// 			if (sTMd >= 0){
+// 				alpha = (dsq - sTMs)/(sTMd + rad);
+// 				negAlpha = -alpha;
+// 			} else {
+// 				alpha = (rad - sTMd)/dTMd;
+// 				negAlpha = -alpha;
+// 			}
 
-			// daxpy_(&n, &alpha, d, &inc, s, &inc);
-			// alpha = -alpha;
-			// daxpy_(&n, &alpha, Hd, &inc, r, &inc);
+// 			// daxpy_(&n, &alpha, d, &inc, s, &inc);
+// 			// alpha = -alpha;
+// 			// daxpy_(&n, &alpha, Hd, &inc, r, &inc);
 
-			dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-			  (n, alpha, dev_d, dev_s);
-			// checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-			dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-			  (n, negAlpha, dev_Hd, dev_r);
-			// checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 			dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+// 			  (n, alpha, dev_d, dev_s);
+// 			// checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 			dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+// 			  (n, negAlpha, dev_Hd, dev_r);
+// 			// checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 
-			alpha = -alpha;
-			break;
-		} // else {
-		//   checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-		//   checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-		//   checkCudaErrors(cudaStreamSynchronize(*stream));
-		// }
-		// checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 			alpha = -alpha;
+// 			break;
+// 		} // else {
+// 		//   checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 		//   checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 		//   checkCudaErrors(cudaStreamSynchronize(*stream));
+// 		// }
+// 		// checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 
-		alpha = -alpha;
-		// checkCudaErrors(cudaStreamSynchronize(*stream));
-		dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-		  (n, alpha, dev_Hd, dev_r);
-		// checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-		// daxpy_(&n, &alpha, Hd, &inc, r, &inc);
-		// checkCudaErrors(cudaStreamSynchronize(*stream));
+// 		alpha = -alpha;
+// 		// checkCudaErrors(cudaStreamSynchronize(*stream));
+// 		dev_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+// 		  (n, alpha, dev_Hd, dev_r);
+// 		// checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 		// daxpy_(&n, &alpha, Hd, &inc, r, &inc);
+// 		// checkCudaErrors(cudaStreamSynchronize(*stream));
 
-		// for (i=0; i<n; i++)
-		// 	z[i] = r[i] / M[i];
-		dev_div <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-		  (n, dev_z, dev_r, dev_M);
-		// checkCudaErrors(cudaMemcpyAsync(z, dev_z, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-		// znewTrnew = ddot_(&n, z, &inc, r, &inc);
-		znewTrnew = thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + n, dev_r, (double) 0);
-		// checkCudaErrors(cudaStreamSynchronize(*stream));
-		beta = znewTrnew/zTr;
-		// dscal_(&n, &beta, d, &inc);
-		// daxpy_(&n, &one, z, &inc, d, &inc);
-		dev_dscal_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-		  (n, beta, dev_z, dev_d);
-		// checkCudaErrors(cudaMemcpyAsync(d, dev_d, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-		// checkCudaErrors(cudaStreamSynchronize(*stream));
-		zTr = znewTrnew;
-	}
+// 		// for (i=0; i<n; i++)
+// 		// 	z[i] = r[i] / M[i];
+// 		dev_div <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+// 		  (n, dev_z, dev_r, dev_M);
+// 		// checkCudaErrors(cudaMemcpyAsync(z, dev_z, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 		// znewTrnew = ddot_(&n, z, &inc, r, &inc);
+// 		znewTrnew = thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + n, dev_r, (double) 0);
+// 		// checkCudaErrors(cudaStreamSynchronize(*stream));
+// 		beta = znewTrnew/zTr;
+// 		// dscal_(&n, &beta, d, &inc);
+// 		// daxpy_(&n, &one, z, &inc, d, &inc);
+// 		dev_dscal_daxpy <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+// 		  (n, beta, dev_z, dev_d);
+// 		// checkCudaErrors(cudaMemcpyAsync(d, dev_d, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 		// checkCudaErrors(cudaStreamSynchronize(*stream));
+// 		zTr = znewTrnew;
+// 	}
 
-	checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-	checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 	checkCudaErrors(cudaMemcpyAsync(s, dev_s, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+// 	checkCudaErrors(cudaMemcpyAsync(r, dev_r, n * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 
-	if (cg_iter == max_cg_iter)
-		info("WARNING: reaching maximal number of CG steps\n");
+// 	if (cg_iter == max_cg_iter)
+// 		info("WARNING: reaching maximal number of CG steps\n");
 
-	cusparseDestroyDnVec(*vecD);
-	cusparseDestroyDnVec(*vecHd);
-	delete vecD;	
-	delete vecHd;	
- 	checkCudaErrors(cudaFree(dev_d));
-	checkCudaErrors(cudaFree(dev_Hd));
-	checkCudaErrors(cudaFree(dev_z));
- 	checkCudaErrors(cudaFree(acc1));
- 	checkCudaErrors(cudaFree(dev_M));
+// 	cusparseDestroyDnVec(*vecD);
+// 	cusparseDestroyDnVec(*vecHd);
+// 	delete vecD;	
+// 	delete vecHd;	
+//  	checkCudaErrors(cudaFree(dev_d));
+// 	checkCudaErrors(cudaFree(dev_Hd));
+// 	checkCudaErrors(cudaFree(dev_z));
+//  	checkCudaErrors(cudaFree(acc1));
+//  	checkCudaErrors(cudaFree(dev_M));
 
-	checkCudaErrors(cudaStreamSynchronize(*stream));
+// 	checkCudaErrors(cudaStreamSynchronize(*stream));
 
- 	checkCudaErrors(cudaFree(dev_s));
- 	checkCudaErrors(cudaFree(dev_r));
-	checkCudaErrors(cudaStreamDestroy(*stream));
-	delete stream;
+//  	checkCudaErrors(cudaFree(dev_s));
+//  	checkCudaErrors(cudaFree(dev_r));
+// 	checkCudaErrors(cudaStreamDestroy(*stream));
+// 	delete stream;
 
 
-	delete[] d;
-	delete[] Hd;
-	delete[] z;
+// 	delete[] d;
+// 	delete[] Hd;
+// 	delete[] z;
 
-	return(cg_iter);
-}
+// 	return(cg_iter);
+// }
 
 double TRON::norm_inf(int n, double *x)
 {
