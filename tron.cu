@@ -266,12 +266,16 @@ void TRON::tron(double *w)
 	double *r = new double[n];
 	double *g = new double[n];
 
-	double *dev_M;
-	double *dev_s;
-	double *dev_r;
+	// double *dev_M;
+	// double *dev_s;
+	// double *dev_r;
 	// checkCudaErrors(cudaMalloc((void** )&dev_M, n * sizeof(double)));
 	// checkCudaErrors(cudaMalloc((void** )&dev_s, n * sizeof(double)));
 	// checkCudaErrors(cudaMalloc((void** )&dev_r, n * sizeof(double)));
+	double *dev_g;
+	cusparseDnVecDescr_t *vecG = new cusparseDnVecDescr_t;
+	checkCudaErrors(cudaMalloc((void** )&dev_g, n * sizeof(double)));
+	cusparseCreateDnVec(vecG, n, dev_g, CUDA_R_64F);
 
 	const double alpha_pcg = 0.01;
 	double *M = new double[n];
@@ -298,16 +302,18 @@ void TRON::tron(double *w)
 	fun_obj->sync_csrStreams();
 
 	f = fun_obj->fun(w, g);
-	fun_obj->grad(w, g);
+	fun_obj->grad(w, g, dev_g, vecG);
+
+	fun_obj->get_diag_preconditioner(M);
+	for(i=0; i<n; i++)
+		M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
+
 	fun_obj->grad_sync(w, g);
 	double gnorm = dnrm2_(&n, g, &inc);
 
 	if (gnorm <= eps*gnorm0)
 		search = 0;
 
-	fun_obj->get_diag_preconditioner(M);
-	for(i=0; i<n; i++)
-		M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
 	delta = sqrt(uTMv(n, g, M, g));
 
 	double *w_new = new double[n];
@@ -317,7 +323,7 @@ void TRON::tron(double *w)
 	{
 	  // cg_iter = trpcg(delta, g, M, s, r, &reach_boundary, 
 	  // 		  dev_M, dev_s, dev_r);
-	  cg_iter = trpcg(delta, g, M, s, r, &reach_boundary); 
+	  cg_iter = trpcg(delta, dev_g, M, s, r, &reach_boundary); 
 			  // dev_M, dev_s, dev_r);
 
 		memcpy(w_new, w, sizeof(double)*n);
@@ -369,7 +375,7 @@ void TRON::tron(double *w)
 			iter++;
 			memcpy(w, w_new, sizeof(double)*n);
 			f = fnew;
-			fun_obj->grad(w, g);
+			fun_obj->grad(w, g, dev_g, vecG);
 			fun_obj->get_diag_preconditioner(M);
 			for(i=0; i<n; i++)
 				M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
@@ -540,7 +546,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	double *d = new double[n];
 	double *Hd = new double[n];
 	double *z = new double[n];
-	double *dev_d, *dev_Hd, *dev_z, *dev_g, *dev_M, *dev_s, *dev_r, *acc1;
+	double *dev_d, *dev_Hd, *dev_z, *dev_M, *dev_s, *dev_r, *acc1;
 	cudaStream_t *stream;
 	cusparseDnVecDescr_t *vecD = new cusparseDnVecDescr_t;
 	cusparseDnVecDescr_t *vecHd = new cusparseDnVecDescr_t;
@@ -561,7 +567,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	checkCudaErrors(cudaMalloc((void** )&dev_z, n * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&acc1, n * sizeof(double)));
 	// 
-	checkCudaErrors(cudaMalloc((void** )&dev_g, n * sizeof(double)));
+	// checkCudaErrors(cudaMalloc((void** )&dev_g, n * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_M, n * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_s, n * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_r, n * sizeof(double)));
@@ -569,7 +575,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	cusparseCreateDnVec(vecD, n, dev_d, CUDA_R_64F);
 	cusparseCreateDnVec(vecHd, n, dev_Hd, CUDA_R_64F);
 
-	checkCudaErrors(cudaMemcpyAsync(dev_g, g, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	// checkCudaErrors(cudaMemcpyAsync(dev_g, g, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	checkCudaErrors(cudaMemcpyAsync(dev_M, M, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	checkCudaErrors(cudaMemcpyAsync(dev_s, s, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	checkCudaErrors(cudaMemcpyAsync(dev_r, r, n * sizeof(double), cudaMemcpyHostToDevice, *stream));
@@ -583,7 +589,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	// 	d[i] = z[i];
 	// }
 
-	init_vectors <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> (dev_s, dev_r, dev_z, dev_d, n, dev_g, dev_M);
+	init_vectors <<< GET_BLOCKS_VAR(n, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> (dev_s, dev_r, dev_z, dev_d, n, g, dev_M);
 
 	// zTr = ddot_(&n, z, &inc, r, &inc);
 	zTr = thrust::inner_product(thrust::cuda::par.on(*stream), dev_z, dev_z + n, dev_r, (double) 0);
@@ -729,7 +735,6 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	checkCudaErrors(cudaFree(dev_Hd));
 	checkCudaErrors(cudaFree(dev_z));
  	checkCudaErrors(cudaFree(acc1));
- 	checkCudaErrors(cudaFree(dev_g));
  	checkCudaErrors(cudaFree(dev_M));
 
 	checkCudaErrors(cudaStreamSynchronize(*stream));

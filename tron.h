@@ -35,7 +35,7 @@ public:
 	virtual void transfer_w(double *w) = 0 ;
 	virtual double fun0(double* g) = 0 ;
 	virtual double fun(double* w, double* g) = 0 ;
-	virtual void grad(double *w, double *g) = 0 ;
+	virtual void grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG) = 0 ;
 	virtual void grad_sync(double *w, double *g) = 0 ;
 	virtual void Hv(double *s, double *Hs, 
 			cusparseDnVecDescr_t *vecS, cusparseDnVecDescr_t *vecHs) = 0 ;

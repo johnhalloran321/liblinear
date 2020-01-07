@@ -146,7 +146,7 @@ public:
         void transfer_w(double *w);
         double fun0(double* g);
         double fun(double *w, double *g);
-	void grad(double *w, double *g);
+  void grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG);
 	void grad_sync(double *w, double *g);
         void Hv(double *s, double *Hs, 
 		cusparseDnVecDescr_t *vecS, cusparseDnVecDescr_t *vecHs);
@@ -433,7 +433,7 @@ double l2r_lr_fun::fun(double *w, double *g)
 	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 
 	checkCudaErrors(cudaStreamSynchronize(*stream));
-	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
+	// checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
 	checkCudaErrors(cudaMemcpyAsync(D, dev_D, l * sizeof(double), cudaMemcpyDeviceToHost, *streamC));
 
 	// for(i=0;i<l;i++)
@@ -456,7 +456,16 @@ __global__ void transform_xts(double* z, double* C, double* D, int l)
   }
 }
 
-void l2r_lr_fun::grad(double *w, double *g)
+__global__ void dev_daxpyA(int n, double alpha, double* x, double* y)
+{
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(r, n) {
+    y[r] += alpha * x[r];
+  }
+}
+
+void l2r_lr_fun::grad(double *w, double *g, 
+		      double* dev_g, cusparseDnVecDescr_t *vecG)
 {
 	int i;
 	double *y=prob->y;
@@ -465,18 +474,21 @@ void l2r_lr_fun::grad(double *w, double *g)
 	double alphaCu = 1.0;
 	double betaCu = 0.0;
 
-	checkCudaErrors(cudaStreamSynchronize(*streamB));
+	// checkCudaErrors(cudaStreamSynchronize(*streamB));
 	// checkCudaErrors(cudaStreamSynchronize(*streamC));
-	XTv(z, g);
+	// XTv(z, g);
 
-	// CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-	// 			     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
-	// 			     CUSPARSE_CSRMV_ALG1, NULL) )
+	cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
+		     &alphaCu, *matA, *vecY, &betaCu, *vecG, CUDA_R_64F,
+		     CUSPARSE_CSRMV_ALG1, NULL);
+	  dev_daxpyA <<< GET_BLOCKS_VAR(w_size, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+	  (w_size, (double) 1, dev_w, dev_g);
+	checkCudaErrors(cudaMemcpyAsync(g, dev_g, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	// checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	// checkCudaErrors(cudaStreamSynchronize(*stream));
 
-	for(i=0;i<w_size;i++)
-		g[i] = w[i] + g[i];
+	// for(i=0;i<w_size;i++)
+	// 	g[i] = w[i] + g[i];
 
 	// cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
 	// 	     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
@@ -490,7 +502,7 @@ void l2r_lr_fun::grad_sync(double *w, double *g)
 	// int i;
 	// int w_size=get_nr_variable();
 
-	// checkCudaErrors(cudaStreamSynchronize(*stream));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
 	// for(i=0;i<w_size;i++)
 	// 	g[i] = w[i] + g[i];
 }
@@ -595,7 +607,7 @@ public:
   void transfer_w(double *w);
   double fun0(double* g);
   double fun(double *w, double *g);
-  void grad(double *w, double *g);
+  void grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG);
   void grad_sync(double *w, double *g);
   void Hv(double *s, double *Hs, 
 	  cusparseDnVecDescr_t *vecS, cusparseDnVecDescr_t *vecHs);
@@ -925,7 +937,7 @@ static int dev_find_id(cudaStream_t stream,
 }
 
 
-void l2r_l2_svc_fun::grad(double *w, double *g)
+void l2r_l2_svc_fun::grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG)
 {
 	int i;
 	double *y=prob->y;
@@ -1050,7 +1062,7 @@ public:
         void transfer_w(double *w);
         double fun0(double* g);
         double fun(double *w, double* g);
-	void grad(double *w, double *g);
+  void grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG);
 	void grad_sync(double *w, double *g);
 
 private:
@@ -1100,7 +1112,7 @@ double l2r_l2_svr_fun::fun(double *w, double* g)
 	return(f);
 }
 
-void l2r_l2_svr_fun::grad(double *w, double *g)
+void l2r_l2_svr_fun::grad(double *w, double *g, double* dev_g, cusparseDnVecDescr_t *vecG)
 {
 	int i;
 	double *y=prob->y;
