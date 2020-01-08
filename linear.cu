@@ -262,9 +262,10 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	double* tr_csrValA = new double[nnz];
 	int* tr_csrColIndA = new int[nnz];
 
-	memcpy(tr_rowInd, tr_csrRowIndA, sizeof(int)*n);
+	// Calculate cumulative number of matrix elements
 	for(int i = 1; i < n+1; i++){
 	  tr_csrRowIndA[i] += tr_csrRowIndA[i-1];
+	  tr_rowInd[i] = tr_csrRowIndA[i];
 	}
 
 	// Create Matrix and allocate device-side matrix storage
@@ -517,8 +518,8 @@ void l2r_lr_fun::grad(double *w, double *g)
 	// checkCudaErrors(cudaStreamSynchronize(*streamC));
 	// XTv(z, g);
 
-	cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-		     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
+	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+		     &alphaCu, *matB, *vecY, &betaCu, *vecX, CUDA_R_64F,
 		     CUSPARSE_CSRMV_ALG1, NULL);
 	checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	// checkCudaErrors(cudaStreamSynchronize(*stream));
