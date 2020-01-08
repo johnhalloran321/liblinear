@@ -169,8 +169,12 @@ private:
   double* dev_csrValA;
   int* dev_csrRowIndA;
   int* dev_csrColIndA;
+  // Transpose
+  double* dev_tr_csrValA;
+  int* dev_tr_csrRowIndA;
+  int* dev_tr_csrColIndA;
   int nnz;
-  cusparseSpMatDescr_t *matA;
+  cusparseSpMatDescr_t *matA, *matB;
   cusparseDnVecDescr_t *vecX, *vecY;
   cusparseHandle_t *handle;
   cudaStream_t *stream, *streamB, *streamC, *streamD, *streamE;
@@ -206,6 +210,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	checkCudaErrors(cudaMalloc((void** )&dev_acc, l * sizeof(double))); 
 
 	matA = new cusparseSpMatDescr_t;
+	matB = new cusparseSpMatDescr_t;
 	vecX = new cusparseDnVecDescr_t;
 	vecY = new cusparseDnVecDescr_t;
 	stream = new cudaStream_t;
@@ -233,26 +238,51 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	time(&startCsrMatTime);
 	clock_t startCsrMatClock = clock();
 
+	// Transpose
+	int* tr_csrRowIndA = new int[n+1];
+	int* tr_rowInd = new int[n]; // Accumulate indices on the fly for each new transposed element
+
+
+	for(int i = 0; i < n+1; i++)
+	  tr_csrRowIndA[i] = 0;
+
 	info("nnz=%d, n=%d, l=%d\n", nnz, n, l);
 	// Generate matrix in COO format
 	for(int i=0;i<l;i++){
 	  feature_node *x = prob->x[i];
 	  while(x->index != -1)
 	    {
-	      x++;
+	      tr_csrRowIndA[x->index]++; // Accumulate number of nonzero entries in a column
 	      nnz++;
+	      x++;
 	    }
+	}
+
+	// Transpose
+	double* tr_csrValA = new double[nnz];
+	int* tr_csrColIndA = new int[nnz];
+
+	memcpy(tr_rowInd, tr_csrRowIndA, sizeof(int)*n);
+	for(int i = 1; i < n+1; i++){
+	  tr_csrRowIndA[i] += tr_csrRowIndA[i-1];
 	}
 
 	// Create Matrix and allocate device-side matrix storage
 	checkCudaErrors(cudaMalloc((void** )&dev_csrValA, nnz * sizeof(double)));
 	checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, (l+1) * sizeof(int)));
 	checkCudaErrors(cudaMalloc((void** )&dev_csrColIndA, nnz * sizeof(int)));
+
+	// // Transpose
+	checkCudaErrors(cudaMalloc((void** )&dev_tr_csrValA, nnz * sizeof(double)));
+	checkCudaErrors(cudaMalloc((void** )&dev_tr_csrRowIndA, (n+1) * sizeof(int)));
+	checkCudaErrors(cudaMalloc((void** )&dev_tr_csrColIndA, nnz * sizeof(int)));
+
 	// 
 
 	double* csrValA = new double[nnz];
 	int* csrRowIndA = new int[l+1];
 	int* csrColIndA = new int[nnz];
+
 	int ind = 0;
 	info("nnz=%d, ind=%d, n=%d, l=%d\n", nnz, ind, n, l);
 	csrRowIndA[0] = 0;
@@ -260,8 +290,18 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	  feature_node *x = prob->x[i];
 	  while(x->index != -1)
 	    {
-	      csrValA[ind] = x->value;
-	      csrColIndA[ind] = x->index-1;
+	      double currval = x->value;
+	      int currind = x->index-1;
+	      
+	      csrValA[ind] = currval;
+	      csrColIndA[ind] = currind;
+
+	      // Transpose
+	      int newind = tr_rowInd[currind]; // Current element index in the tranposed-row
+	      tr_csrColIndA[newind] = i;
+	      tr_csrValA[newind] = currval;
+	      tr_rowInd[currind]++; // Update element index
+
 	      x++;
 	      ind++;
 	    }
@@ -277,15 +317,25 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	info("Constructing the CSR matrix took = %f cpu seconds, %f seconds wall clock time.\n", 
 	     ((double)(procCsrMatClock - startCsrMatClock)) / (double)CLOCKS_PER_SEC, diffCsr);
 
-
 	checkCudaErrors(cudaMemcpyAsync(dev_csrValA, csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, csrRowIndA, (l+1) * sizeof(int), cudaMemcpyHostToDevice, *streamB));
 	checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
+
+	// Transfer Tranpose matrix
+	checkCudaErrors(cudaMemcpyAsync(dev_tr_csrValA, tr_csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_tr_csrRowIndA, tr_csrRowIndA, (n+1) * sizeof(int), cudaMemcpyHostToDevice, *streamB));
+	checkCudaErrors(cudaMemcpyAsync(dev_tr_csrColIndA, tr_csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
 
 	cusparseCreateCsr(matA, l, n, nnz,
 			  dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
 			  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
 			  CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+
+	cusparseCreateCsr(matB, n, l, nnz,
+			  dev_tr_csrRowIndA, dev_tr_csrColIndA, dev_tr_csrValA,
+			  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+			  CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
+
 
 	time_t procSVMStart;
 	clock_t procSVMStartClock = clock();
@@ -298,6 +348,11 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	delete [] csrValA;
 	delete [] csrRowIndA;
 	delete [] csrColIndA;
+
+	delete [] tr_csrValA;
+	delete [] tr_csrRowIndA;
+	delete [] tr_csrColIndA;
+	delete [] tr_rowInd;
 }
 
 l2r_lr_fun::~l2r_lr_fun()
@@ -317,7 +372,12 @@ l2r_lr_fun::~l2r_lr_fun()
 	checkCudaErrors(cudaFree(dev_csrRowIndA));
 	checkCudaErrors(cudaFree(dev_csrColIndA));
 
+	checkCudaErrors(cudaFree(dev_tr_csrValA));
+	checkCudaErrors(cudaFree(dev_tr_csrRowIndA));
+	checkCudaErrors(cudaFree(dev_tr_csrColIndA));
+
 	cusparseDestroySpMat(*matA);
+	cusparseDestroySpMat(*matB);
 	cusparseDestroyDnVec(*vecX);
 	cusparseDestroyDnVec(*vecY);
 	checkCudaErrors(cudaStreamDestroy(*stream));
@@ -328,6 +388,7 @@ l2r_lr_fun::~l2r_lr_fun()
 	cusparseDestroy(*handle);
 
 	delete matA;
+	delete matB;
 	delete vecX;
 	delete vecY;
 	delete stream;
