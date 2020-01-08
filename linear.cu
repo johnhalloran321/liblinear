@@ -420,7 +420,7 @@ double l2r_lr_fun::fun(double *w, double *g)
 	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 
 	checkCudaErrors(cudaStreamSynchronize(*stream));
-	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
+	// checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
 	checkCudaErrors(cudaMemcpyAsync(D, dev_D, l * sizeof(double), cudaMemcpyDeviceToHost, *streamC));
 
 	// for(i=0;i<l;i++)
@@ -452,18 +452,18 @@ void l2r_lr_fun::grad(double *w, double *g)
 	double alphaCu = 1.0;
 	double betaCu = 0.0;
 
-	checkCudaErrors(cudaStreamSynchronize(*streamB));
-	checkCudaErrors(cudaStreamSynchronize(*streamC));
-	XTv(z, g);
+	// checkCudaErrors(cudaStreamSynchronize(*streamB));
+	// checkCudaErrors(cudaStreamSynchronize(*streamC));
+	// XTv(z, g);
 
-	// CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-	// 			     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
-	// 			     CUSPARSE_CSRMV_ALG1, NULL) )
-	// checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
+		     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
+		     CUSPARSE_CSRMV_ALG1, NULL);
+	checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 	// checkCudaErrors(cudaStreamSynchronize(*stream));
 
-	for(i=0;i<w_size;i++)
-		g[i] = w[i] + g[i];
+	// for(i=0;i<w_size;i++)
+	// 	g[i] = w[i] + g[i];
 
 	// cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
 	// 	     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
@@ -474,12 +474,12 @@ void l2r_lr_fun::grad(double *w, double *g)
 
 void l2r_lr_fun::grad_sync(double *w, double *g)
 {
-	// int i;
-	// int w_size=get_nr_variable();
+	int i;
+	int w_size=get_nr_variable();
 
-	// checkCudaErrors(cudaStreamSynchronize(*stream));
-	// for(i=0;i<w_size;i++)
-	// 	g[i] = w[i] + g[i];
+	checkCudaErrors(cudaStreamSynchronize(*stream));
+	for(i=0;i<w_size;i++)
+		g[i] = w[i] + g[i];
 }
 
 int l2r_lr_fun::get_nr_variable(void)

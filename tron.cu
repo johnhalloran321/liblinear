@@ -292,11 +292,6 @@ void TRON::tron(double *w)
 
 	f = fun_obj->fun(w, g);
 	fun_obj->grad(w, g);
-	fun_obj->grad_sync(w, g);
-	double gnorm = dnrm2_(&n, g, &inc);
-
-	if (gnorm <= eps*gnorm0)
-		search = 0;
 
 	fun_obj->get_diag_preconditioner(M);
 	for(i=0; i<n; i++)
@@ -306,6 +301,13 @@ void TRON::tron(double *w)
 	double *w_new = new double[n];
 	bool reach_boundary;
 	bool delta_adjusted = false;
+
+	fun_obj->grad_sync(w, g);
+	double gnorm = dnrm2_(&n, g, &inc);
+
+	if (gnorm <= eps*gnorm0)
+		search = 0;
+
 	while (iter <= max_iter && search)
 	{
 		cg_iter = trpcg(delta, g, M, s, r, &reach_boundary);
