@@ -174,6 +174,15 @@ private:
   int* dev_tr_csrRowIndA;
   int* dev_tr_csrColIndA;
   int nnz;
+  // CPU CSR matrices
+  double* tr_csrValA;
+  int* tr_csrColIndA;
+  int* tr_csrRowIndA;
+  double* csrValA;
+  int* csrRowIndA;
+  int* csrColIndA;
+
+
   cusparseSpMatDescr_t *matA, *matB;
   cusparseDnVecDescr_t *vecX, *vecY;
   cusparseHandle_t *handle;
@@ -239,7 +248,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	clock_t startCsrMatClock = clock();
 
 	// Transpose
-	int* tr_csrRowIndA = new int[n+1];
+	tr_csrRowIndA = new int[n+1];
 	int* tr_rowInd = new int[n]; // Accumulate indices on the fly for each new transposed element
 
 
@@ -259,13 +268,13 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	}
 
 	// Transpose
-	double* tr_csrValA = new double[nnz];
-	int* tr_csrColIndA = new int[nnz];
+	tr_csrValA = new double[nnz];
+	tr_csrColIndA = new int[nnz];
 
 	// Calculate cumulative number of matrix elements
 	for(int i = 1; i < n+1; i++){
 	  tr_csrRowIndA[i] += tr_csrRowIndA[i-1];
-	  tr_rowInd[i] = tr_csrRowIndA[i];
+	  tr_rowInd[i-1] = tr_csrRowIndA[i-1];
 	}
 
 	// Create Matrix and allocate device-side matrix storage
@@ -280,13 +289,15 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 
 	// 
 
-	double* csrValA = new double[nnz];
-	int* csrRowIndA = new int[l+1];
-	int* csrColIndA = new int[nnz];
+	csrValA = new double[nnz];
+	csrRowIndA = new int[l+1];
+	csrColIndA = new int[nnz];
 
 	int ind = 0;
 	info("nnz=%d, ind=%d, n=%d, l=%d\n", nnz, ind, n, l);
 	csrRowIndA[0] = 0;
+
+	// info("Ho\n", nnz, ind);
 	for(int i=0;i<l;i++){
 	  feature_node *x = prob->x[i];
 	  while(x->index != -1)
@@ -309,6 +320,11 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	  csrRowIndA[i+1] = ind;
 	}
 	info("nnz=%d, ind=%d\n", nnz, ind);
+	// info("Hi\n", nnz, ind);
+	info("tr_csrRowIndA[end]=%d, tr_rowInd[end]=%d\n", tr_csrRowIndA[n], tr_rowInd[n-1]);
+	info("tr_csrRowIndA[1]=%d, tr_rowInd[0]=%d\n", tr_csrRowIndA[1], tr_rowInd[0]);
+
+	// exit(2);
 
 	time_t procCsrMatTime;
 	time(&procCsrMatTime);
@@ -346,6 +362,11 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	info("Device initialization took = %f cpu seconds, %f seconds wall clock time.\n", 
 	     ((double)(procSVMStartClock - startSVMClock)) / (double)CLOCKS_PER_SEC, diffSVM);
 
+	delete [] tr_rowInd;
+}
+
+l2r_lr_fun::~l2r_lr_fun()
+{
 	delete [] csrValA;
 	delete [] csrRowIndA;
 	delete [] csrColIndA;
@@ -353,11 +374,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	delete [] tr_csrValA;
 	delete [] tr_csrRowIndA;
 	delete [] tr_csrColIndA;
-	delete [] tr_rowInd;
-}
 
-l2r_lr_fun::~l2r_lr_fun()
-{
 	delete[] z;
 	// delete[] D;
 
