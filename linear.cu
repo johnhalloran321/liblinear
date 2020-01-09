@@ -186,7 +186,7 @@ private:
   cusparseSpMatDescr_t *matA, *matB;
   cusparseDnVecDescr_t *vecX, *vecY;
   cusparseHandle_t *handle;
-  cudaStream_t *stream, *streamB, *streamC, *streamD, *streamE;
+  cudaStream_t *stream, *streamB, *streamC, *streamD, *streamE, *streamF, *streamG, *streamH;
 };
 
 l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
@@ -227,6 +227,9 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	streamC = new cudaStream_t;
 	streamD = new cudaStream_t;
 	streamE = new cudaStream_t;
+	streamF = new cudaStream_t;
+	streamG = new cudaStream_t;
+	streamH = new cudaStream_t;
 	handle = new cusparseHandle_t;
 
 	cusparseCreateDnVec(vecX, n, dev_w, CUDA_R_64F);
@@ -237,6 +240,9 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	checkCudaErrors(cudaStreamCreateWithFlags(streamC, cudaStreamNonBlocking));
 	checkCudaErrors(cudaStreamCreateWithFlags(streamD, cudaStreamNonBlocking));
 	checkCudaErrors(cudaStreamCreateWithFlags(streamE, cudaStreamNonBlocking));
+	checkCudaErrors(cudaStreamCreateWithFlags(streamF, cudaStreamNonBlocking));
+	checkCudaErrors(cudaStreamCreateWithFlags(streamG, cudaStreamNonBlocking));
+	checkCudaErrors(cudaStreamCreateWithFlags(streamH, cudaStreamNonBlocking));
 	cusparseCreate(handle);
 	cusparseSetStream(*handle, *stream);
 
@@ -339,9 +345,9 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
 
 	// Transfer Tranpose matrix
-	checkCudaErrors(cudaMemcpyAsync(dev_tr_csrValA, tr_csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
-	checkCudaErrors(cudaMemcpyAsync(dev_tr_csrRowIndA, tr_csrRowIndA, (n+1) * sizeof(int), cudaMemcpyHostToDevice, *streamB));
-	checkCudaErrors(cudaMemcpyAsync(dev_tr_csrColIndA, tr_csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
+	checkCudaErrors(cudaMemcpyAsync(dev_tr_csrValA, tr_csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *streamF));
+	checkCudaErrors(cudaMemcpyAsync(dev_tr_csrRowIndA, tr_csrRowIndA, (n+1) * sizeof(int), cudaMemcpyHostToDevice, *streamG));
+	checkCudaErrors(cudaMemcpyAsync(dev_tr_csrColIndA, tr_csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamH));
 
 	cusparseCreateCsr(matA, l, n, nnz,
 			  dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
@@ -367,14 +373,6 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 
 l2r_lr_fun::~l2r_lr_fun()
 {
-	delete [] csrValA;
-	delete [] csrRowIndA;
-	delete [] csrColIndA;
-
-	delete [] tr_csrValA;
-	delete [] tr_csrRowIndA;
-	delete [] tr_csrColIndA;
-
 	delete[] z;
 	// delete[] D;
 
@@ -403,6 +401,9 @@ l2r_lr_fun::~l2r_lr_fun()
 	checkCudaErrors(cudaStreamDestroy(*streamC));
 	checkCudaErrors(cudaStreamDestroy(*streamD));
 	checkCudaErrors(cudaStreamDestroy(*streamE));
+	checkCudaErrors(cudaStreamDestroy(*streamF));
+	checkCudaErrors(cudaStreamDestroy(*streamG));
+	checkCudaErrors(cudaStreamDestroy(*streamH));
 	cusparseDestroy(*handle);
 
 	delete matA;
@@ -414,6 +415,9 @@ l2r_lr_fun::~l2r_lr_fun()
 	delete streamC;
 	delete streamD;
 	delete streamE;
+	delete streamF;
+	delete streamG;
+	delete streamH;
 	delete handle;
 
 }
@@ -421,6 +425,21 @@ l2r_lr_fun::~l2r_lr_fun()
 void l2r_lr_fun::sync_csrStreams(){
   checkCudaErrors(cudaStreamSynchronize(*streamB));
   checkCudaErrors(cudaStreamSynchronize(*streamC));
+  // Tranpose data
+  checkCudaErrors(cudaStreamSynchronize(*streamF));
+  checkCudaErrors(cudaStreamSynchronize(*streamG));
+  checkCudaErrors(cudaStreamSynchronize(*streamH));
+
+  // Free matrix arrays
+  delete [] csrValA;
+  delete [] csrRowIndA;
+  delete [] csrColIndA;
+
+  delete [] tr_csrValA;
+  delete [] tr_csrRowIndA;
+  delete [] tr_csrColIndA;
+
+
 }
 
 void l2r_lr_fun::sync_deStreams(){
@@ -595,38 +614,39 @@ void l2r_lr_fun::Hv(double *s, double *Hs)
 	int i;
 	int l=prob->l;
 	int w_size=get_nr_variable();
-	feature_node **x=prob->x;
-// 	double alphaCu = 1.0;
-// 	double betaCu = 0.0;
+	// feature_node **x=prob->x;
 
-// 	checkCudaErrors(cudaMemcpyAsync(dev_w, s, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
-// 	// CHECK_CUSPARSE( 
-// 	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
-// 		     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
-// 		     CUSPARSE_CSRMV_ALG1, NULL); 
-// 			// )
+	double alphaCu = 1.0;
+	double betaCu = 0.0;
 
-//        transform_xts<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
-// 	  (dev_z, dev_C, dev_D, l);
-// 	// CHECK_CUSPARSE( 
-//        cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-// 		    &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
-// 		    CUSPARSE_CSRMV_ALG1, NULL);
-// // )
-// 	checkCudaErrors(cudaMemcpyAsync(Hs, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-// 	checkCudaErrors(cudaStreamSynchronize(*stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_w, s, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	// CHECK_CUSPARSE( 
+	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+		     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
+		     CUSPARSE_CSRMV_ALG1, NULL); 
+			// )
 
-	for(i=0;i<w_size;i++)
-		Hs[i] = 0;
-	for(i=0;i<l;i++)
-	{
-		feature_node * const xi=x[i];
-		double xTs = sparse_operator::dot(s, xi);
+       transform_xts<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+	  (dev_z, dev_C, dev_D, l);
+	// CHECK_CUSPARSE( 
+       cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+		    &alphaCu, *matB, *vecY, &betaCu, *vecX, CUDA_R_64F,
+		    CUSPARSE_CSRMV_ALG1, NULL);
+// )
+	checkCudaErrors(cudaMemcpyAsync(Hs, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
 
-		xTs = C[i]*D[i]*xTs;
+	// for(i=0;i<w_size;i++)
+	// 	Hs[i] = 0;
+	// for(i=0;i<l;i++)
+	// {
+	// 	feature_node * const xi=x[i];
+	// 	double xTs = sparse_operator::dot(s, xi);
 
-		sparse_operator::axpy(xTs, xi, Hs);
-	}
+	// 	xTs = C[i]*D[i]*xTs;
+
+	// 	sparse_operator::axpy(xTs, xi, Hs);
+	// }
 	for(i=0;i<w_size;i++)
 		Hs[i] = s[i] + Hs[i];
 }
