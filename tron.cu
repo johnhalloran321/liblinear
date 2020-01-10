@@ -315,15 +315,12 @@ void TRON::tron(double *w)
 		memcpy(w_new, w, sizeof(double)*n);
 		daxpy_(&n, &one, s, &inc, w_new, &inc);
 
-		// Start next transfer w
+		// Start next transfer of w
 		fun_obj->transfer_w(w_new);
 
 		gs = ddot_(&n, g, &inc, s, &inc);
 		prered = -0.5*(gs-ddot_(&n, s, &inc, r, &inc));
 		fnew = fun_obj->fun(w_new, g);
-
-		// Compute the actual reduction.
-		actred = f - fnew;
 
 		// On the first iteration, adjust the initial step bound.
 		sMnorm = sqrt(uTMv(n, s, M, s));
@@ -332,6 +329,10 @@ void TRON::tron(double *w)
 			delta = min(delta, sMnorm);
 			delta_adjusted = true;
 		}
+
+		fun_obj->sync_stream();
+		// Compute the actual reduction.
+		actred = f - fnew;
 
 		// Compute prediction alpha*sMnorm of the step.
 		if (fnew - f - gs <= 0)
@@ -406,6 +407,12 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	double zTr, znewTrnew, alpha, beta, cgtol;
 	double *z = new double[n];
 
+	double *dev_Hs;
+	cusparseDnVecDescr_t *vecHs = new cusparseDnVecDescr_t;
+	// Allocate device-side storage and create vector
+	checkCudaErrors(cudaMalloc((void** )&dev_Hs, n * sizeof(double)));
+	cusparseCreateDnVec(vecHs, n, dev_Hs, CUDA_R_64F);
+
 	*reach_boundary = false;
 	for (i=0; i<n; i++)
 	{
@@ -415,6 +422,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		d[i] = z[i];
 	}
 
+	fun_obj->transfer_w(d);
 	zTr = ddot_(&n, z, &inc, r, &inc);
 	cgtol = eps_cg*sqrt(zTr);
 	int cg_iter = 0;
@@ -426,9 +434,10 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		if (sqrt(zTr) <= cgtol)
 			break;
 		cg_iter++;
-		fun_obj->Hv(d, Hd);
 
-		alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
+		alpha = fun_obj->Hv(d, Hd, dev_Hs, vecHs);
+
+		alpha = zTr/alpha;
 		daxpy_(&n, &alpha, d, &inc, s, &inc);
 
 		double sMnorm = sqrt(uTMv(n, s, M, s));
@@ -449,9 +458,13 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 				alpha = (rad - sTMd)/dTMd;
 			daxpy_(&n, &alpha, d, &inc, s, &inc);
 			alpha = -alpha;
+			fun_obj->sync_stream();
 			daxpy_(&n, &alpha, Hd, &inc, r, &inc);
 			break;
+		} else {
+		  fun_obj->sync_stream();
 		}
+
 		alpha = -alpha;
 		daxpy_(&n, &alpha, Hd, &inc, r, &inc);
 
@@ -461,6 +474,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		beta = znewTrnew/zTr;
 		dscal_(&n, &beta, d, &inc);
 		daxpy_(&n, &one, z, &inc, d, &inc);
+		fun_obj->transfer_w(d);
 		zTr = znewTrnew;
 	}
 
@@ -470,6 +484,12 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	delete[] d;
 	delete[] Hd;
 	delete[] z;
+
+	cusparseDestroyDnVec(*vecHs);
+	checkCudaErrors(cudaFree(dev_Hs));
+	delete vecHs;
+	// checkCudaErrors(cudaStreamDestroy(*stream));
+	// delete stream;
 
 	return(cg_iter);
 }

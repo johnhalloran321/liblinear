@@ -28,6 +28,7 @@ typedef thrust::device_vector<int>::iterator IndexIterator;
 class function
 {
 public:
+        virtual void sync_stream() = 0 ;
 	virtual void sync_csrStreams() = 0 ;
 	virtual void sync_deStreams() = 0 ;
 	virtual void transfer_w(double *w) = 0 ;
@@ -35,7 +36,7 @@ public:
 	virtual double fun(double* w, double* g) = 0 ;
 	virtual void grad(double *w, double *g) = 0 ;
 	virtual void grad_sync(double *w, double *g) = 0 ;
-	virtual void Hv(double *s, double *Hs) = 0 ;
+	virtual double Hv(double *s, double *Hs, double *dev_s, cusparseDnVecDescr_t *vecS) = 0 ;
 
 	virtual int get_nr_variable(void) = 0 ;
 	virtual void get_diag_preconditioner(double *M) = 0 ;
