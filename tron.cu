@@ -287,8 +287,8 @@ void TRON::tron(double *w)
 	double gnorm0 = dnrm2_(&n, g, &inc);
 	// delete [] w0;
 
-	fun_obj->sync_deStreams();
-	fun_obj->sync_csrStreams();
+	// fun_obj->sync_deStreams();
+	// fun_obj->sync_csrStreams();
 
 	f = fun_obj->fun(w, g);
 	fun_obj->grad(w, g);
