@@ -7,6 +7,7 @@
 #include <time.h>
 #include "linear.h"
 #include "tron.h"
+#include <omp.h>
 #include <helper_cuda.h>  // helper function CUDA error checking and initialization
 #include <helper_functions.h>  // helper for shared functions common to CUDA Samples
 
@@ -98,6 +99,16 @@ __global__ void init_indices(int* indices, int l)
   }
 }
 
+static inline int rand_int(const int max)
+{
+	static int seed = omp_get_thread_num();
+#ifdef CV_OMP
+#pragma omp threadprivate(seed)
+#endif
+	seed = ((seed * 1103515245) + 12345) & 0x7fffffff;
+	return seed%max;
+}
+
 class sparse_operator
 {
 public:
@@ -131,7 +142,93 @@ public:
 			x++;
 		}
 	}
+
+  static void square_axpy(const double a, const feature_node *x, double *y)
+	{
+		while(x->index != -1)
+		{
+			y[x->index-1] += x->value*x->value*a;
+			x++;
+		}
+	}
+
+	static void axpy_omp(const double a, const feature_node *x, double *y, int nnz)
+	{
+#pragma omp parallel for schedule(static)
+		for(int k = 0; k < nnz; k++)
+		{
+			const feature_node *xk = x + k;
+			y[xk->index-1] += a*xk->value;
+		}
+	}
 };
+
+
+class Reduce_Vectors
+{
+public:
+	Reduce_Vectors(int size);
+	~Reduce_Vectors();
+
+	void init(void);
+	void sum_scale_x(double scalar, feature_node *x);
+	void sum_scale_square_x(double scalar, feature_node *x);
+	void reduce_sum(double* v);
+
+private:
+	int nr_thread;
+	int size;
+	double **tmp_array;
+};
+
+Reduce_Vectors::Reduce_Vectors(int size)
+{
+	nr_thread = omp_get_max_threads();
+	this->size = size;
+	tmp_array = new double*[nr_thread];
+	for(int i = 0; i < nr_thread; i++)
+		tmp_array[i] = new double[size];
+}
+
+Reduce_Vectors::~Reduce_Vectors(void)
+{
+	for(int i = 0; i < nr_thread; i++)
+		delete[] tmp_array[i];
+	delete[] tmp_array;
+}
+
+void Reduce_Vectors::init(void)
+{
+#pragma omp parallel for schedule(static)
+	for(int i = 0; i < size; i++)
+		for(int j = 0; j < nr_thread; j++)
+			tmp_array[j][i] = 0.0;
+}
+
+void Reduce_Vectors::sum_scale_x(double scalar, feature_node *x)
+{
+	int thread_id = omp_get_thread_num();
+
+	sparse_operator::axpy(scalar, x, tmp_array[thread_id]);
+}
+
+void Reduce_Vectors::sum_scale_square_x(double scalar, feature_node *x)
+{
+	int thread_id = omp_get_thread_num();
+
+	sparse_operator::square_axpy(scalar, x, tmp_array[thread_id]);
+}
+
+void Reduce_Vectors::reduce_sum(double* v)
+{
+#pragma omp parallel for schedule(static)
+	for(int i = 0; i < size; i++)
+	{
+		v[i] = 1;
+		for(int j = 0; j < nr_thread; j++)
+			v[i] += tmp_array[j][i];
+	}
+}
 
 class l2r_lr_fun: public function
 {
@@ -159,6 +256,9 @@ private:
 	double *C;
 	double *z;
 	double *D;
+
+	Reduce_Vectors *reduce_vectors;
+
 	const problem *prob;
         //////// Cuda variables
   double* dev_w;
@@ -197,6 +297,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	this->prob = prob;
 
 	z = new double[l];
+	reduce_vectors = new Reduce_Vectors(get_nr_variable());
 	// D = new double[l];
 	this->C = C;
 
@@ -375,6 +476,7 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 l2r_lr_fun::~l2r_lr_fun()
 {
 	delete[] z;
+	delete reduce_vectors;
 	// delete[] D;
 
 	// checkCudaErrors(cudaFreeHost(z));
@@ -568,21 +670,25 @@ void l2r_lr_fun::get_diag_preconditioner(double *M)
 	int w_size=get_nr_variable();
 	feature_node **x = prob->x;
 
-	for (i=0; i<w_size; i++)
-		M[i] = 1;
-
+	// for (i=0; i<w_size; i++)
+	// 	M[i] = 1;
+	reduce_vectors->init();
 	// Sync D values
 	checkCudaErrors(cudaStreamSynchronize(*streamC));
 
+#pragma omp parallel for private(i) schedule(guided)
 	for (i=0; i<l; i++)
 	{
 		feature_node *s = x[i];
-		while (s->index!=-1)
-		{
-			M[s->index-1] += s->value*s->value*C[i]*D[i];
-			s++;
-		}
+		reduce_vectors->sum_scale_square_x(C[i]*D[i], s);
+		// while (s->index!=-1)
+		// {
+		// 	M[s->index-1] += s->value*s->value*C[i]*D[i];
+		// 	s++;
+		// }
 	}
+
+	reduce_vectors->reduce_sum(M);
 }
 
 __global__ void dev_daxpy(int n, double alpha, double* x, double* y)
@@ -3251,6 +3357,8 @@ model* train(const problem *prob, const parameter *param)
 		model_->nr_feature=n;
 	model_->param = *param;
 	model_->bias = prob->bias;
+
+	omp_set_num_threads(param->nr_thread);
 
 	if(check_regression_model(model_))
 	{
