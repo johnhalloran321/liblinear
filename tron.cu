@@ -211,17 +211,69 @@ static void default_print(const char *buf)
 	fflush(stdout);
 }
 
-static double uTMv(int n, double *u, double *M, double *v)
+static double uTMv(int n, double *u, double *M, double *v) //, Reduce_Vectors *reduce_vectors)
 {
 	const int m = n-4;
 	double res = 0;
 	int i;
-	for (i=0; i<m; i+=5)
-		res += u[i]*M[i]*v[i]+u[i+1]*M[i+1]*v[i+1]+u[i+2]*M[i+2]*v[i+2]+
-			u[i+3]*M[i+3]*v[i+3]+u[i+4]*M[i+4]*v[i+4];
-	for (; i<n; i++)
+#pragma omp parallel for private(i) reduction(+:res) schedule(static)
+	for (i=0; i<n; i++)
 		res += u[i]*M[i]*v[i];
+	// for (i=0; i<m; i+=5)
+	// 	res += u[i]*M[i]*v[i]+u[i+1]*M[i+1]*v[i+1]+u[i+2]*M[i+2]*v[i+2]+
+	// 		u[i+3]*M[i+3]*v[i+3]+u[i+4]*M[i+4]*v[i+4];
+	// for (; i<n; i++)
+	// 	res += u[i]*M[i]*v[i];
 	return res;
+}
+
+Reduce_Vectors::Reduce_Vectors(int size)
+{
+	nr_thread = omp_get_max_threads();
+	this->size = size;
+	tmp_array = new double*[nr_thread];
+	for(int i = 0; i < nr_thread; i++)
+		tmp_array[i] = new double[size];
+}
+
+Reduce_Vectors::~Reduce_Vectors(void)
+{
+	for(int i = 0; i < nr_thread; i++)
+		delete[] tmp_array[i];
+	delete[] tmp_array;
+}
+
+void Reduce_Vectors::init(void)
+{
+#pragma omp parallel for schedule(static)
+	for(int i = 0; i < size; i++)
+		for(int j = 0; j < nr_thread; j++)
+			tmp_array[j][i] = 0.0;
+}
+
+void Reduce_Vectors::sum_scale_x(double scalar, feature_node *x)
+{
+	int thread_id = omp_get_thread_num();
+
+	sparse_operator::axpy(scalar, x, tmp_array[thread_id]);
+}
+
+void Reduce_Vectors::sum_scale_square_x(double scalar, feature_node *x)
+{
+	int thread_id = omp_get_thread_num();
+
+	sparse_operator::square_axpy(scalar, x, tmp_array[thread_id]);
+}
+
+void Reduce_Vectors::reduce_sum(double* v)
+{
+#pragma omp parallel for schedule(static)
+	for(int i = 0; i < size; i++)
+	{
+		v[i] = 1;
+		for(int j = 0; j < nr_thread; j++)
+			v[i] += tmp_array[j][i];
+	}
 }
 
 void TRON::info(const char *fmt,...)
@@ -268,6 +320,9 @@ void TRON::tron(double *w)
 
 	const double alpha_pcg = 0.01;
 	double *M = new double[n];
+
+	// Reduce_Vectors *reduce_vectors;
+	// reduce_vectors = new Reduce_Vectors(get_nr_variable());
 
 	// // calculate gradient norm at w=0 for stopping condition.
 	// double *w0 = new double[n];
@@ -390,6 +445,7 @@ void TRON::tron(double *w)
 		}
 	}
 
+	// delete reduce_vectors;
 	delete[] g;
 	delete[] r;
 	delete[] w_new;

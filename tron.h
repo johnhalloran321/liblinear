@@ -23,7 +23,80 @@
 
 typedef thrust::device_vector<int>::iterator IndexIterator;
 
+#include "linear.h"
+#include <omp.h>
+
 // using namespace std;
+class sparse_operator
+{
+public:
+	static double nrm2_sq(const feature_node *x)
+	{
+		double ret = 0;
+		while(x->index != -1)
+		{
+			ret += x->value*x->value;
+			x++;
+		}
+		return (ret);
+	}
+
+	static double dot(const double *s, const feature_node *x)
+	{
+		double ret = 0;
+		while(x->index != -1)
+		{
+			ret += s[x->index-1]*x->value;
+			x++;
+		}
+		return (ret);
+	}
+
+	static void axpy(const double a, const feature_node *x, double *y)
+	{
+		while(x->index != -1)
+		{
+			y[x->index-1] += a*x->value;
+			x++;
+		}
+	}
+
+  static void square_axpy(const double a, const feature_node *x, double *y)
+	{
+		while(x->index != -1)
+		{
+			y[x->index-1] += x->value*x->value*a;
+			x++;
+		}
+	}
+
+	static void axpy_omp(const double a, const feature_node *x, double *y, int nnz)
+	{
+#pragma omp parallel for schedule(static)
+		for(int k = 0; k < nnz; k++)
+		{
+			const feature_node *xk = x + k;
+			y[xk->index-1] += a*xk->value;
+		}
+	}
+};
+
+class Reduce_Vectors
+{
+public:
+	Reduce_Vectors(int size);
+	~Reduce_Vectors();
+
+	void init(void);
+	void sum_scale_x(double scalar, feature_node *x);
+	void sum_scale_square_x(double scalar, feature_node *x);
+	void reduce_sum(double* v);
+
+private:
+	int nr_thread;
+	int size;
+	double **tmp_array;
+};
 
 class function
 {
