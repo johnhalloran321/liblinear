@@ -276,14 +276,14 @@ void TRON::tron(double *w)
 	fun_obj->transfer_w(w0);
 	fun_obj->fun(w0, g);
 	fun_obj->grad(w0, g);
-	fun_obj->grad_sync(w0, g);
+	// fun_obj->grad_sync(w0, g);
 	double gnorm0 = dnrm2_(&n, g, &inc);
 	delete [] w0;
 
 	fun_obj->transfer_w(w);
 	f = fun_obj->fun(w, g);
 	fun_obj->grad(w, g);
-	fun_obj->grad_sync(w0, g);
+	// fun_obj->grad_sync(w0, g);
 	double gnorm = dnrm2_(&n, g, &inc);
 
 	if (gnorm <= eps*gnorm0)
@@ -350,7 +350,7 @@ void TRON::tron(double *w)
 			memcpy(w, w_new, sizeof(double)*n);
 			f = fnew;
 			fun_obj->grad(w, g);
-			fun_obj->grad_sync(w0, g);
+			// fun_obj->grad_sync(w0, g);
 			fun_obj->get_diag_preconditioner(M);
 			for(i=0; i<n; i++)
 				M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
@@ -423,7 +423,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		cg_iter++;
 		fun_obj->transfer_w(d);
 		alpha = fun_obj->Hv(d, Hd, dev_Hs, vecHs);
-		fun_obj->sync_stream();
+		// fun_obj->sync_stream();
 
 		alpha = zTr/alpha;
 		daxpy_(&n, &alpha, d, &inc, s, &inc);
