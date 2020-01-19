@@ -269,29 +269,25 @@ void TRON::tron(double *w)
 	const double alpha_pcg = 0.01;
 	double *M = new double[n];
 
-	// // calculate gradient norm at w=0 for stopping condition.
-	// double *w0 = new double[n];
-	// for (i=0; i<n; i++)
-	// 	w0[i] = 0;
-	// fun_obj->transfer_w(w0);
-
 	// calculate gradient norm at w=0 for stopping condition.
-	fun_obj->fun0(g);
-	// fun_obj->fun(w0, g);
-	// fun_obj->grad(w0, g);
-	// Sync gradient stream
-	// fun_obj->grad_sync(w0, g);
-
-
-
+	double *w0 = new double[n];
+	for (i=0; i<n; i++)
+		w0[i] = 0;
+	fun_obj->transfer_w(w0);
+	fun_obj->fun(w0, g);
+	fun_obj->grad(w0, g);
+	fun_obj->grad_sync(w0, g);
 	double gnorm0 = dnrm2_(&n, g, &inc);
-	// delete [] w0;
+	delete [] w0;
 
-	// fun_obj->sync_deStreams();
-	// fun_obj->sync_csrStreams();
-
+	fun_obj->transfer_w(w);
 	f = fun_obj->fun(w, g);
 	fun_obj->grad(w, g);
+	fun_obj->grad_sync(w0, g);
+	double gnorm = dnrm2_(&n, g, &inc);
+
+	if (gnorm <= eps*gnorm0)
+		search = 0;
 
 	fun_obj->get_diag_preconditioner(M);
 	for(i=0; i<n; i++)
@@ -302,12 +298,6 @@ void TRON::tron(double *w)
 	bool reach_boundary;
 	bool delta_adjusted = false;
 
-	fun_obj->grad_sync(w, g);
-	double gnorm = dnrm2_(&n, g, &inc);
-
-	if (gnorm <= eps*gnorm0)
-		search = 0;
-
 	while (iter <= max_iter && search)
 	{
 		cg_iter = trpcg(delta, g, M, s, r, &reach_boundary);
@@ -315,12 +305,13 @@ void TRON::tron(double *w)
 		memcpy(w_new, w, sizeof(double)*n);
 		daxpy_(&n, &one, s, &inc, w_new, &inc);
 
-		// Start next transfer of w
-		fun_obj->transfer_w(w_new);
-
 		gs = ddot_(&n, g, &inc, s, &inc);
 		prered = -0.5*(gs-ddot_(&n, s, &inc, r, &inc));
+		fun_obj->transfer_w(w_new);
 		fnew = fun_obj->fun(w_new, g);
+
+		// Compute the actual reduction.
+		actred = f - fnew;
 
 		// On the first iteration, adjust the initial step bound.
 		sMnorm = sqrt(uTMv(n, s, M, s));
@@ -329,10 +320,6 @@ void TRON::tron(double *w)
 			delta = min(delta, sMnorm);
 			delta_adjusted = true;
 		}
-
-		fun_obj->sync_stream();
-		// Compute the actual reduction.
-		actred = f - fnew;
 
 		// Compute prediction alpha*sMnorm of the step.
 		if (fnew - f - gs <= 0)
@@ -363,11 +350,11 @@ void TRON::tron(double *w)
 			memcpy(w, w_new, sizeof(double)*n);
 			f = fnew;
 			fun_obj->grad(w, g);
+			fun_obj->grad_sync(w0, g);
 			fun_obj->get_diag_preconditioner(M);
 			for(i=0; i<n; i++)
 				M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
-			
-			fun_obj->grad_sync(w, g);
+
 			gnorm = dnrm2_(&n, g, &inc);
 			if (gnorm <= eps*gnorm0)
 				break;
@@ -422,7 +409,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		d[i] = z[i];
 	}
 
-	fun_obj->transfer_w(d);
+	
 	zTr = ddot_(&n, z, &inc, r, &inc);
 	cgtol = eps_cg*sqrt(zTr);
 	int cg_iter = 0;
@@ -434,8 +421,9 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		if (sqrt(zTr) <= cgtol)
 			break;
 		cg_iter++;
-
+		fun_obj->transfer_w(d);
 		alpha = fun_obj->Hv(d, Hd, dev_Hs, vecHs);
+		fun_obj->sync_stream();
 
 		alpha = zTr/alpha;
 		daxpy_(&n, &alpha, d, &inc, s, &inc);
@@ -458,12 +446,10 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 				alpha = (rad - sTMd)/dTMd;
 			daxpy_(&n, &alpha, d, &inc, s, &inc);
 			alpha = -alpha;
-			fun_obj->sync_stream();
+			
 			daxpy_(&n, &alpha, Hd, &inc, r, &inc);
 			break;
-		} else {
-		  fun_obj->sync_stream();
-		}
+		} 
 
 		alpha = -alpha;
 		daxpy_(&n, &alpha, Hd, &inc, r, &inc);
@@ -474,7 +460,6 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		beta = znewTrnew/zTr;
 		dscal_(&n, &beta, d, &inc);
 		daxpy_(&n, &one, z, &inc, d, &inc);
-		fun_obj->transfer_w(d);
 		zTr = znewTrnew;
 	}
 

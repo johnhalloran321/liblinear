@@ -517,8 +517,10 @@ double l2r_lr_fun::fun(double *w, double *g)
 
 	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 
-	// checkCudaErrors(cudaStreamSynchronize(*stream));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
 	checkCudaErrors(cudaMemcpyAsync(D, dev_D, l * sizeof(double), cudaMemcpyDeviceToHost, *streamC));
+
+	checkCudaErrors(cudaStreamSynchronize(*streamC));
 
 	return(f);
 }
@@ -572,7 +574,7 @@ void l2r_lr_fun::get_diag_preconditioner(double *M)
 		M[i] = 1;
 
 	// Sync D values
-	checkCudaErrors(cudaStreamSynchronize(*streamC));
+	// checkCudaErrors(cudaStreamSynchronize(*streamC));
 
 	for (i=0; i<l; i++)
 	{
