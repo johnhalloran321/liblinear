@@ -7,7 +7,6 @@
 #include <time.h>
 #include "linear.h"
 #include "tron.h"
-#include <omp.h>
 #include <helper_cuda.h>  // helper function CUDA error checking and initialization
 #include <helper_functions.h>  // helper for shared functions common to CUDA Samples
 

@@ -219,11 +219,12 @@ static double uTMv(int n, double *u, double *M, double *v) //, Reduce_Vectors *r
 #pragma omp parallel for private(i) reduction(+:res) schedule(static)
 	for (i=0; i<n; i++)
 		res += u[i]*M[i]*v[i];
-	// for (i=0; i<m; i+=5)
-	// 	res += u[i]*M[i]*v[i]+u[i+1]*M[i+1]*v[i+1]+u[i+2]*M[i+2]*v[i+2]+
-	// 		u[i+3]*M[i+3]*v[i+3]+u[i+4]*M[i+4]*v[i+4];
-	// for (; i<n; i++)
-	// 	res += u[i]*M[i]*v[i];
+// #pragma omp parallel for private(i) reduction(+:res) schedule(static)
+// 	for (i=0; i<m; i+=5)
+// 		res += u[i]*M[i]*v[i]+u[i+1]*M[i+1]*v[i+1]+u[i+2]*M[i+2]*v[i+2]+
+// 			u[i+3]*M[i+3]*v[i+3]+u[i+4]*M[i+4]*v[i+4];
+// 	for (; i<n; i++)
+// 		res += u[i]*M[i]*v[i];
 	return res;
 }
 
@@ -470,6 +471,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	cusparseCreateDnVec(vecHs, n, dev_Hs, CUDA_R_64F);
 
 	*reach_boundary = false;
+#pragma omp parallel for schedule(static)
 	for (i=0; i<n; i++)
 	{
 		s[i] = 0;
@@ -524,6 +526,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		alpha = -alpha;
 		daxpy_(&n, &alpha, Hd, &inc, r, &inc);
 
+#pragma omp parallel for schedule(static)
 		for (i=0; i<n; i++)
 			z[i] = r[i] / M[i];
 		znewTrnew = ddot_(&n, z, &inc, r, &inc);
