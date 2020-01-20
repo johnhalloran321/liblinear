@@ -2886,20 +2886,16 @@ static void train_one(const problem *prob, const parameter *param, double *w, do
 			TRON tron_obj(fun_obj, primal_solver_tol, eps_cg);
 			tron_obj.set_print_string(liblinear_print_string);
 
-			for(int timing_test = 0; timing_test <10; timing_test++){
-			  for(int i=0;i<prob->n;i++)
-			    w[i] = 0;
-			  struct timespec start, finish;
-			  double elapsed;
-			  clock_gettime(CLOCK_MONOTONIC, &start);
+			struct timespec start, finish;
+			double elapsed;
+			clock_gettime(CLOCK_MONOTONIC, &start);
 
-			  tron_obj.tron(w);
+			tron_obj.tron(w);
 
-			  clock_gettime(CLOCK_MONOTONIC, &finish);
-			  elapsed = (finish.tv_sec - start.tv_sec);
-			  elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
-			  info("Iter %d: Training took = %f seconds wall clock time.\n", timing_test, elapsed);
-			}
+			clock_gettime(CLOCK_MONOTONIC, &finish);
+			elapsed = (finish.tv_sec - start.tv_sec);
+			elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
+			info("Training took = %f seconds wall clock time.\n", elapsed);
 
 			delete fun_obj;
 			delete[] C;
