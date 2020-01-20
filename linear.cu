@@ -324,14 +324,6 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	}
 	info("nnz=%d, ind=%d\n", nnz, ind);
 
-	// time_t procCsrMatTime;
-	// time(&procCsrMatTime);
-	// clock_t procCsrMatClock = clock();
-	// double diffCsr = difftime(procCsrMatTime,startCsrMatTime);
-
-	// info("Constructing the CSR matrix took = %f cpu seconds, %f seconds wall clock time.\n", 
-	//      ((double)(procCsrMatClock - startCsrMatClock)) / (double)CLOCKS_PER_SEC, diffCsr);
-
 	checkCudaErrors(cudaMemcpyAsync(dev_csrValA, csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, csrRowIndA, (l+1) * sizeof(int), cudaMemcpyHostToDevice, *streamB));
 	checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
@@ -360,14 +352,6 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	checkCudaErrors(cudaStreamSynchronize(*streamF));
 	checkCudaErrors(cudaStreamSynchronize(*streamG));
 	checkCudaErrors(cudaStreamSynchronize(*streamH));
-
-	// time_t procSVMStart;
-	// clock_t procSVMStartClock = clock();
-	// time(&procSVMStart);
-	// double diffSVM = difftime(procSVMStart,startSVMTime);
-
-	// info("Device initialization took = %f cpu seconds, %f seconds wall clock time.\n", 
-	//      ((double)(procSVMStartClock - startSVMClock)) / (double)CLOCKS_PER_SEC, diffSVM);
 
 	delete [] tr_rowInd;
 }
@@ -778,14 +762,6 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
   }
   info("nnz=%d, ind=%d\n", nnz, ind);
 
-  time_t procCsrMatTime;
-  time(&procCsrMatTime);
-  clock_t procCsrMatClock = clock();
-  double diffCsr = difftime(procCsrMatTime,startCsrMatTime);
-
-  info("Constructing the CSR matrix took = %f cpu seconds, %f seconds wall clock time.\n", 
-       ((double)(procCsrMatClock - startCsrMatClock)) / (double)CLOCKS_PER_SEC, diffCsr);
-
   checkCudaErrors(cudaMalloc((void** )&dev_csrValA, nnz * sizeof(double)));
   checkCudaErrors(cudaMalloc((void** )&dev_csrRowIndA, nnz * sizeof(int)));
   checkCudaErrors(cudaMalloc((void** )&dev_csrColIndA, nnz * sizeof(int)));
@@ -829,14 +805,6 @@ l2r_l2_svc_fun::l2r_l2_svc_fun(const problem *prob, double *C)
 		    dev_csrRowIndA, dev_csrColIndA, dev_csrValA,
 		    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
 		    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
-
-  time_t procSVMStart;
-  clock_t procSVMStartClock = clock();
-  time(&procSVMStart);
-  double diffSVM = difftime(procSVMStart,startSVMTime);
-
-  info("Device initialization took = %f cpu seconds, %f seconds wall clock time.\n", 
-       ((double)(procSVMStartClock - startSVMClock)) / (double)CLOCKS_PER_SEC, diffSVM);
 
   delete [] csrValA;
   delete [] csrRowIndA;
@@ -2918,28 +2886,20 @@ static void train_one(const problem *prob, const parameter *param, double *w, do
 			TRON tron_obj(fun_obj, primal_solver_tol, eps_cg);
 			tron_obj.set_print_string(liblinear_print_string);
 
-			// time_t startTRAINTime;
-			// time(&startTRAINTime);
-			// clock_t startTRAINClock = clock();
+			for(int timing_test = 0; timing_test <10; timing_test++){
+			  for(int i=0;i<prob->n;i++)
+			    w[i] = 0;
+			  struct timespec start, finish;
+			  double elapsed;
+			  clock_gettime(CLOCK_MONOTONIC, &start);
 
-			struct timespec start, finish;
-			double elapsed;
-			clock_gettime(CLOCK_MONOTONIC, &start);
+			  tron_obj.tron(w);
 
-			tron_obj.tron(w);
-
-			clock_gettime(CLOCK_MONOTONIC, &finish);
-			elapsed = (finish.tv_sec - start.tv_sec);
-			elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
-			info("Training took = %f seconds wall clock time.\n", elapsed);
-
-			// time_t procTRAINStart;
-			// clock_t procTRAINStartClock = clock();
-			// time(&procTRAINStart);
-			// double diffTRAIN = difftime(procTRAINStart,startTRAINTime);
-
-			// info("Training took = %f cpu seconds, %f seconds wall clock time.\n", 
-			//      ((double)(procTRAINStartClock - startTRAINClock)) / (double)CLOCKS_PER_SEC, diffTRAIN);
+			  clock_gettime(CLOCK_MONOTONIC, &finish);
+			  elapsed = (finish.tv_sec - start.tv_sec);
+			  elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
+			  info("Iter %d: Training took = %f seconds wall clock time.\n", timing_test, elapsed);
+			}
 
 			delete fun_obj;
 			delete[] C;
@@ -2959,10 +2919,6 @@ static void train_one(const problem *prob, const parameter *param, double *w, do
 			TRON tron_obj(fun_obj, primal_solver_tol, eps_cg);
 			tron_obj.set_print_string(liblinear_print_string);
 
-			// time_t startTRAINTime;
-			// time(&startTRAINTime);
-			// clock_t startTRAINClock = clock();
-
 			struct timespec start, finish;
 			double elapsed;
 			clock_gettime(CLOCK_MONOTONIC, &start);
@@ -2973,14 +2929,6 @@ static void train_one(const problem *prob, const parameter *param, double *w, do
 			elapsed = (finish.tv_sec - start.tv_sec);
 			elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
 			info("Training took = %f seconds wall clock time.\n", elapsed);
-
-			// time_t procTRAINStart;
-			// clock_t procTRAINStartClock = clock();
-			// time(&procTRAINStart);
-			// double diffTRAIN = difftime(procTRAINStart,startTRAINTime);
-
-			// info("Training took = %f cpu seconds, %f seconds wall clock time.\n", 
-			//      ((double)(procTRAINStartClock - startTRAINClock)) / (double)CLOCKS_PER_SEC, diffTRAIN);
 
 			delete fun_obj;
 			delete[] C;
