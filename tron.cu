@@ -249,8 +249,6 @@ TRON::~TRON()
 
 void TRON::tron(double *w)
 {
-	// Start next transfer w
-        fun_obj->transfer_w(w);
 	// Parameters for updating the iterates.
 	double eta0 = 1e-4, eta1 = 0.25, eta2 = 0.75;
 
@@ -273,17 +271,13 @@ void TRON::tron(double *w)
 	double *w0 = new double[n];
 	for (i=0; i<n; i++)
 		w0[i] = 0;
-	fun_obj->transfer_w(w0);
 	fun_obj->fun(w0, g);
 	fun_obj->grad(w0, g);
-	// fun_obj->grad_sync(w0, g);
 	double gnorm0 = dnrm2_(&n, g, &inc);
 	delete [] w0;
 
-	fun_obj->transfer_w(w);
 	f = fun_obj->fun(w, g);
 	fun_obj->grad(w, g);
-	// fun_obj->grad_sync(w0, g);
 	double gnorm = dnrm2_(&n, g, &inc);
 
 	if (gnorm <= eps*gnorm0)
@@ -297,7 +291,6 @@ void TRON::tron(double *w)
 	double *w_new = new double[n];
 	bool reach_boundary;
 	bool delta_adjusted = false;
-
 	while (iter <= max_iter && search)
 	{
 		cg_iter = trpcg(delta, g, M, s, r, &reach_boundary);
@@ -307,7 +300,6 @@ void TRON::tron(double *w)
 
 		gs = ddot_(&n, g, &inc, s, &inc);
 		prered = -0.5*(gs-ddot_(&n, s, &inc, r, &inc));
-		fun_obj->transfer_w(w_new);
 		fnew = fun_obj->fun(w_new, g);
 
 		// Compute the actual reduction.
@@ -350,7 +342,6 @@ void TRON::tron(double *w)
 			memcpy(w, w_new, sizeof(double)*n);
 			f = fnew;
 			fun_obj->grad(w, g);
-			// fun_obj->grad_sync(w0, g);
 			fun_obj->get_diag_preconditioner(M);
 			for(i=0; i<n; i++)
 				M[i] = (1-alpha_pcg) + alpha_pcg*M[i];
@@ -394,12 +385,6 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	double zTr, znewTrnew, alpha, beta, cgtol;
 	double *z = new double[n];
 
-	double *dev_Hs;
-	cusparseDnVecDescr_t *vecHs = new cusparseDnVecDescr_t;
-	// Allocate device-side storage and create vector
-	checkCudaErrors(cudaMalloc((void** )&dev_Hs, n * sizeof(double)));
-	cusparseCreateDnVec(vecHs, n, dev_Hs, CUDA_R_64F);
-
 	*reach_boundary = false;
 	for (i=0; i<n; i++)
 	{
@@ -409,23 +394,19 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		d[i] = z[i];
 	}
 
-	
 	zTr = ddot_(&n, z, &inc, r, &inc);
 	cgtol = eps_cg*sqrt(zTr);
 	int cg_iter = 0;
 	int max_cg_iter = max(n, 5);
-	double dsq = delta*delta;
 
 	while (cg_iter < max_cg_iter)
 	{
 		if (sqrt(zTr) <= cgtol)
 			break;
 		cg_iter++;
-		fun_obj->transfer_w(d);
-		alpha = fun_obj->Hv(d, Hd, dev_Hs, vecHs);
-		// fun_obj->sync_stream();
+		fun_obj->Hv(d, Hd);
 
-		alpha = zTr/alpha;
+		alpha = zTr/ddot_(&n, d, &inc, Hd, &inc);
 		daxpy_(&n, &alpha, d, &inc, s, &inc);
 
 		double sMnorm = sqrt(uTMv(n, s, M, s));
@@ -439,6 +420,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 			double sTMd = uTMv(n, s, M, d);
 			double sTMs = uTMv(n, s, M, s);
 			double dTMd = uTMv(n, d, M, d);
+			double dsq = delta*delta;
 			double rad = sqrt(sTMd*sTMd + dTMd*(dsq-sTMs));
 			if (sTMd >= 0)
 				alpha = (dsq - sTMs)/(sTMd + rad);
@@ -446,11 +428,9 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 				alpha = (rad - sTMd)/dTMd;
 			daxpy_(&n, &alpha, d, &inc, s, &inc);
 			alpha = -alpha;
-			
 			daxpy_(&n, &alpha, Hd, &inc, r, &inc);
 			break;
-		} 
-
+		}
 		alpha = -alpha;
 		daxpy_(&n, &alpha, Hd, &inc, r, &inc);
 
@@ -469,12 +449,6 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 	delete[] d;
 	delete[] Hd;
 	delete[] z;
-
-	cusparseDestroyDnVec(*vecHs);
-	checkCudaErrors(cudaFree(dev_Hs));
-	delete vecHs;
-	// checkCudaErrors(cudaStreamDestroy(*stream));
-	// delete stream;
 
 	return(cg_iter);
 }
