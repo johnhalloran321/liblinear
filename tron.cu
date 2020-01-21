@@ -249,6 +249,9 @@ TRON::~TRON()
 
 void TRON::tron(double *w)
 {
+	// Start next transfer w
+	fun_obj->transfer_w(w);
+
 	// Parameters for updating the iterates.
 	double eta0 = 1e-4, eta1 = 0.25, eta2 = 0.75;
 
@@ -273,15 +276,10 @@ void TRON::tron(double *w)
 		w0[i] = 0;
 	// fun_obj->transfer_w(w0);
 	fun_obj->fun0(g);
-	fun_obj->sync_deStreams();
-	fun_obj->sync_csrStreams();
 	// fun_obj->fun(w0, g);
 	// fun_obj->grad(w0, g);
 	// Sync gradient stream
 	// fun_obj->grad_sync(w0, g);
-
-	// Start next transfer w
-	fun_obj->transfer_w(w);
 
 	double gnorm0 = dnrm2_(&n, g, &inc);
 	delete [] w0;

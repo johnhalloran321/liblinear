@@ -187,11 +187,6 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	// D = new double[l];
 	this->C = C;
 
-	// time how long initializig the device is taking
-	time_t startSVMTime;
-	time(&startSVMTime);
-	clock_t startSVMClock = clock();
-
 	/////////// Cuda variables
 	// // Pin memory
 	checkCudaErrors(cudaMallocHost((void** )&D, l * sizeof(double)));
@@ -229,10 +224,6 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	checkCudaErrors(cudaMemcpyAsync(dev_y, prob->y, l * sizeof(double), cudaMemcpyHostToDevice, *streamD));
 	checkCudaErrors(cudaMemcpyAsync(dev_C, C, l * sizeof(double), cudaMemcpyHostToDevice, *streamE));
 
-	time_t startCsrMatTime;
-	time(&startCsrMatTime);
-	clock_t startCsrMatClock = clock();
-
 	info("nnz=%d, n=%d, l=%d\n", nnz, n, l);
 	// Generate matrix in COO format
 	for(int i=0;i<l;i++){
@@ -269,15 +260,6 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 	}
 	info("nnz=%d, ind=%d\n", nnz, ind);
 
-	time_t procCsrMatTime;
-	time(&procCsrMatTime);
-	clock_t procCsrMatClock = clock();
-	double diffCsr = difftime(procCsrMatTime,startCsrMatTime);
-
-	info("Constructing the CSR matrix took = %f cpu seconds, %f seconds wall clock time.\n", 
-	     ((double)(procCsrMatClock - startCsrMatClock)) / (double)CLOCKS_PER_SEC, diffCsr);
-
-
 	checkCudaErrors(cudaMemcpyAsync(dev_csrValA, csrValA, nnz * sizeof(double), cudaMemcpyHostToDevice, *stream));
 	checkCudaErrors(cudaMemcpyAsync(dev_csrRowIndA, csrRowIndA, (l+1) * sizeof(int), cudaMemcpyHostToDevice, *streamB));
 	checkCudaErrors(cudaMemcpyAsync(dev_csrColIndA, csrColIndA, nnz * sizeof(int), cudaMemcpyHostToDevice, *streamC));
@@ -287,13 +269,11 @@ l2r_lr_fun::l2r_lr_fun(const problem *prob, double *C)
 			  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
 			  CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F);
 
-	time_t procSVMStart;
-	clock_t procSVMStartClock = clock();
-	time(&procSVMStart);
-	double diffSVM = difftime(procSVMStart,startSVMTime);
-
-	info("Device initialization took = %f cpu seconds, %f seconds wall clock time.\n", 
-	     ((double)(procSVMStartClock - startSVMClock)) / (double)CLOCKS_PER_SEC, diffSVM);
+	checkCudaErrors(cudaStreamSynchronize(*stream));
+	checkCudaErrors(cudaStreamSynchronize(*streamB));
+	checkCudaErrors(cudaStreamSynchronize(*streamC));
+	checkCudaErrors(cudaStreamSynchronize(*streamD));
+	checkCudaErrors(cudaStreamSynchronize(*streamE));
 
 	delete [] csrValA;
 	delete [] csrRowIndA;
@@ -354,10 +334,9 @@ __global__ void ready_accumulator(double* z, double* C, double* D, double* y, do
   // use grid-stride loop
   CUDA_KERNEL_LOOP(i, l) {
     double yz = y[i]*z[i];
-    // z[i] = yz;
-    z[i] = 1/(1 + exp(-yz));
-    D[i] = z[i]*(1-z[i]);
-    z[i] = C[i]*(z[i]-1)*y[i];
+    // z[i] = 1/(1 + exp(-yz));
+    // D[i] = z[i]*(1-z[i]);
+    // z[i] = C[i]*(z[i]-1)*y[i];
     if (yz >= 0) {
       acc[i] = C[i]*log(1 + exp(-yz));
     } else {
@@ -420,8 +399,8 @@ double l2r_lr_fun::fun(double *w, double *g)
 	f += ddot_(&w_size, w, &inc, w, &inc) / 2.0;
 
 	checkCudaErrors(cudaStreamSynchronize(*stream));
-	// checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
-	checkCudaErrors(cudaMemcpyAsync(D, dev_D, l * sizeof(double), cudaMemcpyDeviceToHost, *streamC));
+	checkCudaErrors(cudaMemcpyAsync(z, dev_z, l * sizeof(double), cudaMemcpyDeviceToHost, *streamB));
+	// checkCudaErrors(cudaMemcpyAsync(D, dev_D, l * sizeof(double), cudaMemcpyDeviceToHost, *streamC));
 
 	// for(i=0;i<l;i++)
 	// {
@@ -452,40 +431,34 @@ void l2r_lr_fun::grad(double *w, double *g)
 	double alphaCu = 1.0;
 	double betaCu = 0.0;
 
-	// checkCudaErrors(cudaStreamSynchronize(*streamB));
+	checkCudaErrors(cudaStreamSynchronize(*streamB));
 	// checkCudaErrors(cudaStreamSynchronize(*streamC));
-	// for(i=0;i<l;i++)
-	// {
-	// 	// z[i] = 1/(1 + exp(-y[i]*z[i]));
-	// 	// z[i] = 1/(1 + exp(-z[i]));
-	// 	D[i] = z[i]*(1-z[i]);
-	// 	z[i] = C[i]*(z[i]-1)*y[i];
-	// }
-	// XTv(z, g);
+	for(i=0;i<l;i++)
+	{
+		z[i] = 1/(1 + exp(-y[i]*z[i]));
+		D[i] = z[i]*(1-z[i]);
+		z[i] = C[i]*(z[i]-1)*y[i];
+	}
+	XTv(z, g);
 
-	// CHECK_CUSPARSE( cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-	// 			     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
-	// 			     CUSPARSE_CSRMV_ALG1, NULL) )
+	// cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
+	// 	     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
+	// 	     CUSPARSE_CSRMV_ALG1, NULL);
 	// checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
 
-	cusparseSpMV(*handle, CUSPARSE_OPERATION_TRANSPOSE,
-		     &alphaCu, *matA, *vecY, &betaCu, *vecX, CUDA_R_64F,
-		     CUSPARSE_CSRMV_ALG1, NULL);
-	checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
-
 	// checkCudaErrors(cudaStreamSynchronize(*stream));
-	// for(i=0;i<w_size;i++)
-	// 	g[i] = w[i] + g[i];
+	for(i=0;i<w_size;i++)
+		g[i] = w[i] + g[i];
 }
 
 void l2r_lr_fun::grad_sync(double *w, double *g)
 {
-	int i;
-	int w_size=get_nr_variable();
+	// int i;
+	// int w_size=get_nr_variable();
 
-	checkCudaErrors(cudaStreamSynchronize(*stream));
-	for(i=0;i<w_size;i++)
-		g[i] = w[i] + g[i];
+	// checkCudaErrors(cudaStreamSynchronize(*stream));
+	// for(i=0;i<w_size;i++)
+	// 	g[i] = w[i] + g[i];
 }
 
 int l2r_lr_fun::get_nr_variable(void)
@@ -504,7 +477,7 @@ void l2r_lr_fun::get_diag_preconditioner(double *M)
 		M[i] = 1;
 
 	// Sync D values
-	checkCudaErrors(cudaStreamSynchronize(*streamC));
+	// checkCudaErrors(cudaStreamSynchronize(*streamC));
 
 	for (i=0; i<l; i++)
 	{
@@ -2833,7 +2806,18 @@ static void train_one(const problem *prob, const parameter *param, double *w, do
 			fun_obj=new l2r_lr_fun(prob, C);
 			TRON tron_obj(fun_obj, primal_solver_tol, eps_cg);
 			tron_obj.set_print_string(liblinear_print_string);
+
+			struct timespec start, finish;
+			double elapsed;
+			clock_gettime(CLOCK_MONOTONIC, &start);
+
 			tron_obj.tron(w);
+
+			clock_gettime(CLOCK_MONOTONIC, &finish);
+			elapsed = (finish.tv_sec - start.tv_sec);
+			elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
+			info("Training took = %f seconds wall clock time.\n", elapsed);
+
 			delete fun_obj;
 			delete[] C;
 			break;
