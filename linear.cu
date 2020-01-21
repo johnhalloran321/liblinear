@@ -450,6 +450,8 @@ void l2r_lr_fun::grad(double *w, double *g)
 	double *y=prob->y;
 	int l=prob->l;
 	int w_size=get_nr_variable();
+	double alphaCu = 1.0;
+	double betaCu = 0.0;
 
 	for(i=0;i<l;i++)
 	{
@@ -457,7 +459,13 @@ void l2r_lr_fun::grad(double *w, double *g)
 		D[i] = z[i]*(1-z[i]);
 		z[i] = C[i]*(z[i]-1)*y[i];
 	}
-	XTv(z, g);
+	checkCudaErrors(cudaMemcpyAsync(dev_z, z, l * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+		     &alphaCu, *matB, *vecY, &betaCu, *vecX, CUDA_R_64F,
+		     CUSPARSE_CSRMV_ALG1, NULL);
+	checkCudaErrors(cudaMemcpyAsync(g, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+	checkCudaErrors(cudaStreamSynchronize(*stream));
+	// XTv(z, g);
 
 	for(i=0;i<w_size;i++)
 		g[i] = w[i] + g[i];
