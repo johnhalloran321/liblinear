@@ -271,26 +271,11 @@ void TRON::tron(double *w)
 	double *M = new double[n];
 
 	// calculate gradient norm at w=0 for stopping condition.
-	double *w0 = new double[n];
-	for (i=0; i<n; i++)
-		w0[i] = 0;
-	// fun_obj->transfer_w(w0);
 	fun_obj->fun0(g);
-	// fun_obj->fun(w0, g);
-	// fun_obj->grad(w0, g);
-	// Sync gradient stream
-	// fun_obj->grad_sync(w0, g);
-
 	double gnorm0 = dnrm2_(&n, g, &inc);
-	delete [] w0;
 
 	f = fun_obj->fun(w, g);
 	fun_obj->grad(w, g);
-	fun_obj->grad_sync(w, g);
-	double gnorm = dnrm2_(&n, g, &inc);
-
-	if (gnorm <= eps*gnorm0)
-		search = 0;
 
 	fun_obj->get_diag_preconditioner(M);
 	for(i=0; i<n; i++)
@@ -300,6 +285,13 @@ void TRON::tron(double *w)
 	double *w_new = new double[n];
 	bool reach_boundary;
 	bool delta_adjusted = false;
+
+	fun_obj->grad_sync(w, g);
+	double gnorm = dnrm2_(&n, g, &inc);
+
+	if (gnorm <= eps*gnorm0)
+		search = 0;
+
 	while (iter <= max_iter && search)
 	{
 		cg_iter = trpcg(delta, g, M, s, r, &reach_boundary);
