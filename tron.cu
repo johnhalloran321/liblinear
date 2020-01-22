@@ -422,7 +422,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		d[i] = z[i];
 	}
 
-	fun_obj->transfer_w(d);
+	// fun_obj->transfer_w(d);
 	zTr = ddot_(&n, z, &inc, r, &inc);
 	cgtol = eps_cg*sqrt(zTr);
 	int cg_iter = 0;
@@ -458,12 +458,12 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 				alpha = (rad - sTMd)/dTMd;
 			daxpy_(&n, &alpha, d, &inc, s, &inc);
 			alpha = -alpha;
-			fun_obj->sync_stream();
+			// fun_obj->sync_stream();
 			daxpy_(&n, &alpha, Hd, &inc, r, &inc);
 			break;
-		} else {
-		  fun_obj->sync_stream();
-		}
+		}//  else {
+		//   fun_obj->sync_stream();
+		// }
 
 		alpha = -alpha;
 		daxpy_(&n, &alpha, Hd, &inc, r, &inc);
@@ -474,7 +474,7 @@ int TRON::trpcg(double delta, double *g, double *M, double *s, double *r, bool *
 		beta = znewTrnew/zTr;
 		dscal_(&n, &beta, d, &inc);
 		daxpy_(&n, &one, z, &inc, d, &inc);
-		fun_obj->transfer_w(d);
+		// fun_obj->transfer_w(d);
 		zTr = znewTrnew;
 	}
 
