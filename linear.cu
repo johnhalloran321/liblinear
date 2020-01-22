@@ -497,6 +497,14 @@ void l2r_lr_fun::get_diag_preconditioner(double *M)
 	}
 }
 
+__global__ void transform_xts(double* z, double* C, double* D, int l)
+{
+  // use grid-stride loop
+  CUDA_KERNEL_LOOP(i, l) {
+    z[i] *= C[i] * D[i];
+  }
+}
+
 void l2r_lr_fun::Hv(double *s, double *Hs)
 {
 	int i;
@@ -504,19 +512,43 @@ void l2r_lr_fun::Hv(double *s, double *Hs)
 	int w_size=get_nr_variable();
 	feature_node **x=prob->x;
 
-	for(i=0;i<w_size;i++)
-		Hs[i] = 0;
-	for(i=0;i<l;i++)
-	{
-		feature_node * const xi=x[i];
-		double xTs = sparse_operator::dot(s, xi);
+	double alphaCu = 1.0;
+	double betaCu = 0.0;
 
-		xTs = C[i]*D[i]*xTs;
+       	checkCudaErrors(cudaMemcpyAsync(dev_w, s, w_size * sizeof(double), cudaMemcpyHostToDevice, *stream));
+	checkCudaErrors(cudaMemcpyAsync(dev_D, D, l * sizeof(double), cudaMemcpyHostToDevice, *stream));
+       	// dev_w = s, set on the stream
 
-		sparse_operator::axpy(xTs, xi, Hs);
-	}
-	for(i=0;i<w_size;i++)
-		Hs[i] = s[i] + Hs[i];
+       	cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+       		     &alphaCu, *matA, *vecX, &betaCu, *vecY, CUDA_R_64F,
+       		     CUSPARSE_CSRMV_ALG1, NULL); 
+
+       transform_xts<<< GET_BLOCKS_VAR(l, CUDA_NUM_THREADS), CUDA_NUM_THREADS, 0, *stream >>> 
+       	  (dev_z, dev_C, dev_D, l);
+
+       // dev_s = Hs
+       cusparseSpMV(*handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
+       		    &alphaCu, *matB, *vecY, &betaCu, *vecX, CUDA_R_64F,
+       		    CUSPARSE_CSRMV_ALG1, NULL);
+       checkCudaErrors(cudaMemcpyAsync(Hs, dev_w, w_size * sizeof(double), cudaMemcpyDeviceToHost, *stream));
+       checkCudaErrors(cudaStreamSynchronize(*stream));
+
+       	for(i=0;i<w_size;i++)
+       		Hs[i] = s[i] + Hs[i];
+
+	// for(i=0;i<w_size;i++)
+	// 	Hs[i] = 0;
+	// for(i=0;i<l;i++)
+	// {
+	// 	feature_node * const xi=x[i];
+	// 	double xTs = sparse_operator::dot(s, xi);
+
+	// 	xTs = C[i]*D[i]*xTs;
+
+	// 	sparse_operator::axpy(xTs, xi, Hs);
+	// }
+	// for(i=0;i<w_size;i++)
+	// 	Hs[i] = s[i] + Hs[i];
 }
 
 void l2r_lr_fun::Xv(double *v, double *Xv)
