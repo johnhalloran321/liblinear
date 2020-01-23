@@ -2897,28 +2897,21 @@ static void train_one(const problem *prob, const parameter *param, double *w, do
 			TRON tron_obj(fun_obj, primal_solver_tol, eps_cg);
 			tron_obj.set_print_string(liblinear_print_string);
 
-			// time_t startTRAINTime;
-			// time(&startTRAINTime);
-			// clock_t startTRAINClock = clock();
+			for(int i = 0; i < 10; i++){
+			  for(int j = 0; j < prob-> n; j++)
+			    w[j] = 0;
 
-			struct timespec start, finish;
-			double elapsed;
-			clock_gettime(CLOCK_MONOTONIC, &start);
+			  struct timespec start, finish;
+			  double elapsed;
+			  clock_gettime(CLOCK_MONOTONIC, &start);
 
-			tron_obj.tron(w);
+			  tron_obj.tron(w);
 
-			clock_gettime(CLOCK_MONOTONIC, &finish);
-			elapsed = (finish.tv_sec - start.tv_sec);
-			elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
-			info("Training took = %f seconds wall clock time.\n", elapsed);
-
-			// time_t procTRAINStart;
-			// clock_t procTRAINStartClock = clock();
-			// time(&procTRAINStart);
-			// double diffTRAIN = difftime(procTRAINStart,startTRAINTime);
-
-			// info("Training took = %f cpu seconds, %f seconds wall clock time.\n", 
-			//      ((double)(procTRAINStartClock - startTRAINClock)) / (double)CLOCKS_PER_SEC, diffTRAIN);
+			  clock_gettime(CLOCK_MONOTONIC, &finish);
+			  elapsed = (finish.tv_sec - start.tv_sec);
+			  elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
+			  info("Iter %d: Training took = %f seconds wall clock time.\n", i, elapsed);
+			}
 
 			delete fun_obj;
 			delete[] C;
